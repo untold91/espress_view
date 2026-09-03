@@ -2,7 +2,11 @@
 
 ## Project Identity
 
-`espress_view` is a CustomTkinter-based desktop GUI for ESP32-family serial discovery and firmware programming. The application wraps `esptool` while keeping device I/O and command execution off the Tk event thread.
+`espress_view` is a CustomTkinter-based desktop GUI for ESP32-family serial discovery, serial monitoring, and firmware programming. A shared Device Discovery selector feeds the lower Monitor and Flash workspaces.
+
+## Version 0.3
+
+This release adds serial monitoring, shared navigation, icon-based controls and tooltips, a safer terminal shutdown path, and the `2000000` Flash baud-rate default.
 
 ## Implemented Architecture
 
@@ -10,15 +14,19 @@
 - PySerial enumerates operating-system serial ports, including Windows COM ports and Unix-style device nodes.
 - A background device-scan thread sends `esptool read-mac` results to the Tk thread through an event queue.
 - A separate flash worker starts `python -m esptool write_flash`, combines its output streams, and forwards output and progress events through the same queue.
+- The serial monitor opens the selected COM port at its independently selected baud rate and reads incoming bytes on its own background thread.
 - A lock protects the active subprocess so the circular Abort action can safely terminate the current operation.
 
 ## Interface Behavior
 
 - Device Discovery lists verified ESP devices as `Chip Type | COM ID | MAC Address` and supports manual rescanning.
+- Monitor is the default lower workspace; Flash is selected through the sidebar when required.
 - Firmware Layout preserves one non-removable binary entry and supports up to four additional removable entries.
-- Each firmware address initializes to `0x0000`, and the selected baud rate defaults to `115200`.
+- Each firmware address initializes to `0x0000`; Flash defaults to `2000000` baud and Monitor defaults to `115200` baud.
 - The progress bar exposes `esptool` percentage updates and sits alongside the percentage text and Abort control.
 - The log panel is collapsed by default; expanded mode provides clear and save actions without discarding console output when hidden.
+- Monitor provides Connect and Disconnect controls, clear and save actions, and a command field that sends exact UTF-8 text without appending line endings.
+- Attempting to flash the device currently connected to Monitor presents a Disconnect and Proceed or Cancel decision.
 
 ## Operating Considerations
 

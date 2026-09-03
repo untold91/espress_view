@@ -4,6 +4,10 @@
 
 `espress_view` is a developer-focused, cross-platform Python desktop application for discovering ESP devices and programming ESP32-family firmware over serial.
 
+## Version 0.3
+
+Version 0.3 introduces the Monitor workspace, shared Device Discovery navigation, custom application and control icons, and safe terminal interrupt shutdown.
+
 ## Technology
 
 - GUI: CustomTkinter.
@@ -23,6 +27,18 @@ Chip Type | COM ID | MAC Address
 
 Non-ESP ports, unavailable ports, and ports that do not respond before the timeout are excluded. The selected COM ID becomes the `--port` argument used by the programming operation.
 
+The Device Discovery selector is shared by the Monitor and Flash views. The sidebar switches only the lower workspace. Monitor is the default workspace at application startup.
+
+## Serial Monitor
+
+The Monitor workspace provides a dedicated baud-rate selector, defaulting to `115200`, and a Connect or Disconnect control. On connection, a background thread reads serial bytes and forwards decoded UTF-8 output to the monitor console.
+
+The monitor console includes clear and save-log icon actions. The command field sends the entered text encoded as UTF-8 exactly as written. It does not add line-ending characters.
+
+A monitor session must be disconnected before a flash operation starts. Likewise, the Monitor cannot connect while `esptool` is active.
+
+When Flash targets the same COM ID currently connected to Monitor, the application shows a warning dialog. The user can select `Disconnect and Proceed` to close Monitor and start flashing or `Cancel` to preserve the active monitor session.
+
 ## Firmware Layout
 
 Firmware Layout uses a dynamic partition list with these rules:
@@ -31,7 +47,7 @@ Firmware Layout uses a dynamic partition list with these rules:
 - Additional rows also default to `0x0000`, show a red Remove button, and are renumbered after deletion.
 - A row contains an index, binary-file input, Browse action, hexadecimal address input, and a fixed-width action slot.
 - The application permits at most five rows.
-- Baud-rate choices range from `9600` through `2000000`; the default is `115200`.
+- Baud-rate choices range from `9600` through `2000000`; the Flash default is `2000000`.
 
 ## Programming And Progress
 

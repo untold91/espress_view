@@ -2,6 +2,13 @@
 
 Desktop utility for discovering ESP serial devices and programming one to five firmware binaries with `esptool`.
 
+## Version 0.3
+
+- Adds the serial Monitor workspace with independent baud rate, Connect and Disconnect controls, exact-text sending, and retained serial logs.
+- Adds shared device discovery and a Monitor or Flash sidebar workflow.
+- Adds progress, abort, persistent logs, icon controls, tooltips, and safe terminal `Ctrl+C` shutdown.
+- Uses `2000000` as the default Flash baud rate and `115200` as the default Monitor baud rate.
+
 ## Features
 
 - ESP discovery that verifies each serial port through `esptool read-mac` and displays `Chip Type | COM ID | MAC Address`.
@@ -9,6 +16,9 @@ Desktop utility for discovering ESP serial devices and programming one to five f
 - Configurable serial baud rates from `9600` to `2000000`, with `115200` selected by default.
 - Background firmware programming with streamed `esptool` output, a percentage progress bar, and an enabled-only-while-flashing Abort control.
 - Collapsible log view with clear and save-log controls when expanded.
+- Serial Monitor with independent baud-rate selection, connection controls, retained output, and exact-text transmission.
+
+Monitor is the default workspace when the application opens. Flash remains available from the sidebar.
 
 ## Setup
 
@@ -33,6 +43,19 @@ On macOS or Linux, activate it with `source .venv/bin/activate` before installin
 
 The app runs `python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write_flash` in a background thread. The circular Abort button is unavailable until this command starts and requests process termination when selected.
 
+## Serial Monitor
+
+1. Select a discovered ESP device.
+2. Choose a Monitor baud rate. This setting is independent from the Flash baud rate.
+3. Select `Connect` to stream serial output into the Monitor console.
+4. Enter text at the bottom of the Monitor view and select `Send` or press Enter.
+
+Send transmits exactly the text entered, encoded as UTF-8. It does not append `LF`, `CR`, or `CRLF` line endings. Select `Disconnect` before starting a flash operation.
+
+The Monitor console includes `⌫` to clear its output and `↓` to save it as a `.log` or `.txt` file.
+
+If Flash targets the device currently connected in Monitor, the application displays a warning. Choose `Disconnect and Proceed` to close that monitor connection and begin flashing, or `Cancel` to leave the monitor connected.
+
 ## Logs
 
 The log panel starts collapsed to keep the main window compact. Select the down-arrow control to expand it and the up-arrow control to collapse it.
@@ -55,6 +78,7 @@ espress_view/
 ├── main.py             # CustomTkinter application
 ├── requirements.txt    # Runtime dependencies
 ├── README.md           # Installation and use guide
-├── blueprint.md        # Current application specification
-└── summary.md          # Technical and implementation summary
+└── docs/
+	├── blueprint.md    # Current application specification
+	└── summary.md      # Technical and implementation summary
 ```
