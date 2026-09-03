@@ -4,16 +4,16 @@
 
 `espress_view` is a CustomTkinter-based desktop GUI for ESP32-family serial discovery, serial monitoring, and firmware programming. A shared Device Discovery selector feeds the lower Monitor and Flash workspaces.
 
-## Version 0.3
+## Version 0.4.0
 
-This release adds serial monitoring, shared navigation, icon-based controls and tooltips, a safer terminal shutdown path, and the `2000000` Flash baud-rate default.
+This release includes serial monitoring, shared navigation, icon-based controls and tooltips, a safer terminal shutdown path, packaged esptool support, and the `2000000` Flash baud-rate default.
 
 ## Implemented Architecture
 
 - `main.py` owns the CustomTkinter window, device selection, partition state, flash control, progress state, and log view.
 - PySerial enumerates operating-system serial ports, including Windows COM ports and Unix-style device nodes.
 - A background device-scan thread sends `esptool read-mac` results to the Tk thread through an event queue.
-- A separate flash worker starts `python -m esptool write_flash`, combines its output streams, and forwards output and progress events through the same queue.
+- A separate flash worker starts `python -m esptool write-flash`, combines its output streams, and forwards output and progress events through the same queue.
 - The serial monitor opens the selected COM port at its independently selected baud rate and reads incoming bytes on its own background thread.
 - A lock protects the active subprocess so the circular Abort action can safely terminate the current operation.
 

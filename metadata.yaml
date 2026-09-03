@@ -1,0 +1,13 @@
+Version: 0.4.0
+CompanyName: None
+FileDescription: ESP device discovery, serial monitoring, and firmware flashing tool.
+InternalName: espress_view
+LegalCopyright: 2026 (C) Dhanush K, All rights reserved.
+OriginalFilename: espress_view.exe
+ProductName: Espress View
+Author: Dhanush K
+Translation:
+  - langID: 0
+    charsetID: 1200
+  - langID: 1033
+    charsetID: 1252

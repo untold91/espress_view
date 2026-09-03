@@ -2,7 +2,7 @@
 
 Desktop utility for discovering ESP serial devices and programming one to five firmware binaries with `esptool`.
 
-## Version 0.3
+## Version 0.4.0
 
 - Adds the serial Monitor workspace with independent baud rate, Connect and Disconnect controls, exact-text sending, and retained serial logs.
 - Adds shared device discovery and a Monitor or Flash sidebar workflow.
@@ -13,7 +13,7 @@ Desktop utility for discovering ESP serial devices and programming one to five f
 
 - ESP discovery that verifies each serial port through `esptool read-mac` and displays `Chip Type | COM ID | MAC Address`.
 - Firmware Layout with one permanent first binary row and up to four removable additional partition rows.
-- Configurable serial baud rates from `9600` to `2000000`, with `115200` selected by default.
+- Configurable serial baud rates from `9600` to `2000000`, with `2000000` selected by default for Flash.
 - Background firmware programming with streamed `esptool` output, a percentage progress bar, and an enabled-only-while-flashing Abort control.
 - Collapsible log view with clear and save-log controls when expanded.
 - Serial Monitor with independent baud-rate selection, connection controls, retained output, and exact-text transmission.
@@ -28,10 +28,20 @@ Create and activate a virtual environment from PowerShell:
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install -r scripts\requirements.txt
 python main.py
 ```
 
 On macOS or Linux, activate it with `source .venv/bin/activate` before installing dependencies and running the app.
+
+The root `requirements.txt` contains application runtime dependencies. The separate `scripts/requirements.txt` contains the PyInstaller and version-metadata tools required only when building an executable.
+
+To build the executable from PowerShell after installing both manifests, run:
+
+```powershell
+python scripts\build_script.py -c
+python scripts\build_script.py -b main.py
+```
 
 ## Firmware Programming
 
@@ -41,7 +51,7 @@ On macOS or Linux, activate it with `source .venv/bin/activate` before installin
 4. Add up to four more partitions as needed. Added rows can be removed; the first row cannot.
 5. Select the baud rate and choose `Flash Program`.
 
-The app runs `python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write_flash` in a background thread. The circular Abort button is unavailable until this command starts and requests process termination when selected.
+The app runs `python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write-flash` in a background thread. The circular Abort button is unavailable until this command starts and requests process termination when selected.
 
 ## Serial Monitor
 
@@ -78,7 +88,10 @@ espress_view/
 ├── main.py             # CustomTkinter application
 ├── requirements.txt    # Runtime dependencies
 ├── README.md           # Installation and use guide
+├── scripts/
+│   ├── build_script.py  # Executable build and clean utility
+│   └── requirements.txt  # Build-only dependencies
 └── docs/
-	├── blueprint.md    # Current application specification
-	└── summary.md      # Technical and implementation summary
+    ├── blueprint.md    # Current application specification
+    └── summary.md      # Technical and implementation summary
 ```

@@ -4,9 +4,9 @@
 
 `espress_view` is a developer-focused, cross-platform Python desktop application for discovering ESP devices and programming ESP32-family firmware over serial.
 
-## Version 0.3
+## Version 0.4.0
 
-Version 0.3 introduces the Monitor workspace, shared Device Discovery navigation, custom application and control icons, and safe terminal interrupt shutdown.
+Version 0.4.0 includes the Monitor workspace, shared Device Discovery navigation, custom application and control icons, safe terminal interrupt shutdown, and packaged esptool support.
 
 ## Technology
 
@@ -54,7 +54,7 @@ Firmware Layout uses a dynamic partition list with these rules:
 Flash Program validates the selected device, binary paths, and hexadecimal addresses before starting an asynchronous command equivalent to:
 
 ```powershell
-python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write_flash ADDRESS BINARY
+python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write-flash ADDRESS BINARY
 ```
 
 The application streams combined standard output and error into the retained log. Percentage values reported by `esptool` update the progress bar and its text label. The circular red Abort button remains disabled until the process begins and terminates the active process when selected.

@@ -5,7 +5,7 @@
     Brief: Discover ESP devices and flash selected firmware partitions
   Created: 2026-09-03
     Updated: 2026-09-03
-    Version: v0.3.0
+    Version: v0.4.0
 
 Copyright: (c) 2026 Project contributors.
 
@@ -14,6 +14,7 @@ Description:
     management needed to discover serial devices and invoke esptool safely.
 """
 
+import ctypes
 import logging
 import queue
 import re
@@ -25,16 +26,68 @@ from pathlib import Path
 from tkinter import TclError, filedialog
 
 import customtkinter as ctk
+import esptool
 import serial
 from PIL import Image, ImageTk
+from esptool.util import FatalError
 from serial.tools import list_ports
 
 LOGGER = logging.getLogger(__name__)
+SINGLE_INSTANCE_MUTEX = "Local\\EspressViewSingleInstance"
+ERROR_ALREADY_EXISTS = 183
 MAX_PARTITIONS = 5
 BAUD_RATES = (
     "9600", "14400", "19200", "28800", "38400", "57600", "74880", "76800", "115200", "128000", "153600",
     "230400", "256000", "460800", "512000", "576000", "921600", "1000000", "1500000", "2000000",
 )
+
+_instance_state = {"handle": None}
+
+
+def acquire_single_instance() -> bool:
+    """Acquire the process-wide Windows mutex used to prevent duplicate launches."""
+    if sys.platform != "win32":
+        return True
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    mutex_handle = kernel32.CreateMutexW(None, True, SINGLE_INSTANCE_MUTEX)
+    if not mutex_handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
+        kernel32.CloseHandle(mutex_handle)
+        return False
+    _instance_state["handle"] = int(mutex_handle)
+    return True
+
+
+def release_single_instance() -> None:
+    """Release the Windows mutex held by this application process."""
+    mutex_handle = _instance_state["handle"]
+    if mutex_handle is None or sys.platform != "win32":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CloseHandle(ctypes.c_void_p(mutex_handle))
+    _instance_state["handle"] = None
+
+
+def esptool_worker_command(arguments: list[str]) -> list[str]:
+    """Build a command that runs the bundled esptool worker in any launch mode."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--esptool-worker", *arguments]
+    return [sys.executable, str(Path(__file__).resolve()), "--esptool-worker", *arguments]
+
+
+def run_esptool_worker(arguments: list[str]) -> int:
+    """Run esptool inside the current Python or packaged executable process."""
+    try:
+        esptool.main(arguments)
+    except SystemExit as error:
+        return int(error.code) if isinstance(error.code, int) else 1
+    except FatalError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    return 0
 
 
 @dataclass
@@ -113,7 +166,7 @@ class EspressView(ctk.CTk):
         self.title("Espress View")
         self.geometry("1040x540")
         self.minsize(860, 540)
-        self._application_icon = ImageTk.PhotoImage(Image.open(Path(__file__).parent / "icons" / "espressif.png"))
+        self._application_icon = ImageTk.PhotoImage(Image.open(Path(__file__).parent / "icons" / "exe-file.ico"))
         self.iconphoto(True, self._application_icon)
         self._active_process: subprocess.Popen[str] | None = None
         self._process_lock = threading.Lock()
@@ -606,7 +659,7 @@ class EspressView(ctk.CTk):
         for port in ports:
             try:
                 result = subprocess.run(
-                    [sys.executable, "-m", "esptool", "--port", port.device, "read-mac"],
+                    esptool_worker_command(["--port", port.device, "read-mac"]),
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -636,7 +689,7 @@ class EspressView(ctk.CTk):
             else:
                 self._write_console("Disconnect the active serial monitor before flashing another device.\n")
             return
-        arguments = ["--chip", "auto", "--port", port, "--baud", self.baud_var.get(), "write_flash"]
+        arguments = ["--chip", "auto", "--port", port, "--baud", self.baud_var.get(), "write-flash"]
         for partition in self._partitions:
             binary = Path(partition.file_path.get())
             try:
@@ -656,7 +709,7 @@ class EspressView(ctk.CTk):
         self.progress_var.set(0)
         self.progress_text_var.set("0%")
         self.abort_button.configure(state="normal", fg_color="#b53434", hover_color="#8e2727")
-        self._write_console(f"$ {sys.executable} -m esptool {' '.join(arguments)}\n")
+        self._write_console(f"$ {' '.join(esptool_worker_command(arguments))}\n")
         threading.Thread(target=self._flash_worker, args=(arguments,), daemon=True).start()
 
     def _show_monitor_warning(self) -> None:
@@ -693,7 +746,7 @@ class EspressView(ctk.CTk):
         try:
             with self._process_lock:
                 self._active_process = subprocess.Popen(
-                    [sys.executable, "-m", "esptool", *arguments],
+                    esptool_worker_command(arguments),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -837,13 +890,20 @@ class EspressView(ctk.CTk):
 def main() -> None:
     """Configure logging and run the Espress View application."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    if not acquire_single_instance():
+        LOGGER.warning("Espress View is already running")
+        return
     application = EspressView()
     try:
         application.mainloop()
     except KeyboardInterrupt:
         LOGGER.warning("Application interrupted from the terminal")
         application.close_application()
+    finally:
+        release_single_instance()
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--esptool-worker":
+        raise SystemExit(run_esptool_worker(sys.argv[2:]))
     main()

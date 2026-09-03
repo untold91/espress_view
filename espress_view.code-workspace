@@ -1,0 +1,53 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"actionButtons": {
+			"defaultColor": "Dark Gray",
+			"loadNpmCommands": true,
+			"commands": [
+				{
+					"tooltip": "Build",
+					"name": "$(build)",
+					"color": "#81A1C1", /* Nord Ice Blue — cool and calming */
+					"singleInstance": true,
+					"terminalName": "Build-Clean",
+					"command": "py scripts/build_script.py -b main.py",
+					"cwd": "${workspaceFolder}"
+				},
+				{
+					"tooltip": "Clean",
+					"name": "$(trash)",
+					"color": "#D08770", /* Muted Terracotta — soft burnt orange */
+					"singleInstance": true,
+					"terminalName": "Build-Clean",
+					"command": "py scripts/build_script.py -c",
+					"cwd": "${workspaceFolder}"
+				},
+				{
+					"tooltip": "Run/Debug",
+					"name": "$(debug-alt)",
+					"color": "#BF616A", /* Nord Red — dusty brick red */
+					"singleInstance": true,
+					"useVsCodeApi": true,
+					"command": "workbench.action.debug.start"
+				}
+			],
+		}
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "Python Debugger",
+				"type": "debugpy",
+				"request": "launch",
+				"program": "${workspaceFolder}/main.py",
+				"console": "integratedTerminal"
+			}
+		]
+	}
+}
