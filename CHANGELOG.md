@@ -4,6 +4,18 @@ All notable changes to Espress View are documented here.
 
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- A theme-aware outline icon system, semantic light/dark design tokens, and persistent appearance and window-size preferences.
+- Bounded, batched terminal output with scroll-position preservation and clearer discovery, connection, and flash statuses.
+
+### Changed
+
+- Redesigned the Monitor and Flash workspaces with a responsive shared shell and consistent device selection.
+- Workspace navigation and flash-log expansion now preserve the current window size and maximized state.
+
 ## [0.4.0] - 2026-09-03
 
 ### Added

@@ -6,10 +6,10 @@ Espress View is a local desktop application. The CustomTkinter frontend coordina
 
 | Layer | Responsibility | Boundary |
 |---|---|---|
-| `gui` | Main window, discovery selector, Monitor and Flash workspaces, progress/log rendering, user interactions | Owns all Tk/CustomTkinter widgets and variables |
+| `gui` | Main window, discovery selector, Monitor and Flash workspaces, progress/log rendering, user interactions, shared design tokens, and locally rendered outline icons | Owns all Tk/CustomTkinter widgets and variables |
 | `core` | Enumerate serial ports, handshake candidate ESP devices, open/read/write/close the serial monitor | No Tkinter or CustomTkinter imports |
 | `flasher` | Validate addresses and binaries, build esptool arguments, run/abort the esptool child process, stream output | No Tkinter or CustomTkinter imports |
-| `utils` | Resolve icons in source/PyInstaller execution; guard against duplicate Windows launches | Platform/resource helpers |
+| `utils` | Resolve the application icon in source/PyInstaller execution; persist appearance, baud-rate, view, and window-size preferences; guard against duplicate Windows launches | Platform, settings, and resource helpers |
 | `assets/icons` | Application and control images | Shared runtime resources |
 
 The package entry point is `espress_view.__main__`. In a source checkout, use `python -m espress_view`; PyInstaller packages the same entry point for executable distribution.
@@ -44,7 +44,9 @@ flowchart TB
 
 The GUI starts device discovery and serial reading on background threads so serial waits do not block the window. The flash thread manages a child worker process and forwards its merged output and parsed percentage updates. These workers publish `(event, value)` pairs into a thread-safe `queue.Queue`. They must not call Tk methods or mutate Tk variables.
 
-The UI schedules `_drain_events` with `after(100, ...)`, drains available queue entries on the Tk thread, updates widgets, then schedules the next poll. Monitor writes are issued in response to UI actions; monitor disconnect closes the active serial handle and sets the worker stop event.
+The UI schedules `_drain_events` with `after`, drains up to 500 queued events on the Tk thread, batches terminal output, updates widgets, then schedules the next poll. Monitor writes are issued in response to UI actions; monitor disconnect closes the active serial handle and sets that connection's stop event.
+
+The GUI keeps the user's current window geometry when switching workspaces or expanding flash output. Its shared `gui.design` tokens provide light/dark semantic colors, while `gui.icons` renders the small outline icon set locally with Pillow so no network access or additional icon dependency is needed.
 
 ```mermaid
 sequenceDiagram
