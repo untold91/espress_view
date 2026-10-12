@@ -1,97 +1,158 @@
 # Espress View
 
-Desktop utility for discovering ESP serial devices and programming one to five firmware binaries with `esptool`.
-
-## Version 0.4.0
-
-- Adds the serial Monitor workspace with independent baud rate, Connect and Disconnect controls, exact-text sending, and retained serial logs.
-- Adds shared device discovery and a Monitor or Flash sidebar workflow.
-- Adds progress, abort, persistent logs, icon controls, tooltips, and safe terminal `Ctrl+C` shutdown.
-- Uses `2000000` as the default Flash baud rate and `115200` as the default Monitor baud rate.
+Espress View (`espress_view`) is a desktop **Serial Port Interface Viewer & Firmware Flasher** built with [CustomTkinter](https://github.com/TomSchimansky/CustomTkinter) and [PySerial](https://github.com/pyserial/pyserial). It discovers ESP devices, provides a live serial terminal, and programs firmware through Espressif's `esptool`.
 
 ## Features
 
-- ESP discovery that verifies each serial port through `esptool read-mac` and displays `Chip Type | COM ID | MAC Address`.
-- Firmware Layout with one permanent first binary row and up to four removable additional partition rows.
-- Configurable serial baud rates from `9600` to `2000000`, with `2000000` selected by default for Flash.
-- Background firmware programming with streamed `esptool` output, a percentage progress bar, and an enabled-only-while-flashing Abort control.
-- Collapsible log view with clear and save-log controls when expanded.
-- Serial Monitor with independent baud-rate selection, connection controls, retained output, and exact-text transmission.
+- **Serial Monitor:** connect to a discovered device, choose a baud rate, view retained serial output, clear or export logs, and send the exact text entered (UTF-8, without an added newline).
+- **Firmware Flasher:** program one to five `.bin` images at user-selected hexadecimal addresses, with streamed output, progress reporting, and abort control.
+- **Device Discovery:** probe visible serial ports using an `esptool read-mac` handshake; list devices that respond with their chip type, port, and MAC address.
+- **Monitor and Flash workspaces:** switch between the serial terminal and firmware layout while sharing device discovery.
 
-Monitor is the default workspace when the application opens. Flash remains available from the sidebar.
+The Monitor baud rate defaults to `115200`; the Flash baud rate defaults to `2000000`. The current file picker accepts `.bin` firmware files. Intel HEX (`.hex`) is not currently supported directly.
 
-## Setup
+## Architecture
 
-Create and activate a virtual environment from PowerShell:
+```mermaid
+flowchart LR
+    User[User] --> GUI[CustomTkinter GUI]
+    GUI --> Discover[Device discovery]
+    GUI --> Monitor[Serial monitor service]
+    GUI --> Validate[Flash argument validation]
+    Validate --> Runner[esptool process runner]
+    Discover --> Ports[PySerial port enumeration]
+    Discover --> Worker[esptool worker process<br/>read-mac handshake]
+    Monitor --> Port[Selected serial port]
+    Runner --> FlashWorker[esptool worker process<br/>write-flash]
+    Discover -. worker results .-> Events[Thread-safe queue.Queue]
+    Monitor -. serial data/errors .-> Events
+    Runner -. output/progress/completion .-> Events
+    Events -->|CTk.after polling on UI thread| GUI
+```
+
+**Thread boundary:** Tk widgets and Tk variables are only read or changed on the GUI thread. Background workers perform discovery, serial reads, and flash-process management, then publish results through `queue.Queue`. The GUI periodically drains that queue using `CTk.after()`. The serial monitor writes on the GUI thread when the user sends text.
+
+## Quickstart
+
+Python 3.10 or later is required. From the repository root:
+
+### Windows PowerShell
 
 ```powershell
-python -m venv .venv
+py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-pip install -r scripts\requirements.txt
-python main.py
+python -m pip install --upgrade pip
+python -m pip install -e .
+python -m espress_view
 ```
 
-On macOS or Linux, activate it with `source .venv/bin/activate` before installing dependencies and running the app.
+### macOS or Linux
 
-The root `requirements.txt` contains application runtime dependencies. The separate `scripts/requirements.txt` contains the PyInstaller and version-metadata tools required only when building an executable.
-
-To build the executable from PowerShell after installing both manifests, run:
-
-```powershell
-python scripts\build_script.py -c
-python scripts\build_script.py -b main.py
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
+python -m espress_view
 ```
 
-## Firmware Programming
+For executable packaging, install the build-only dependencies with `python -m pip install -r scripts/requirements.txt`, then see [the packaging guide](docs/packaging-guide.md). The shared helper in `scripts/` is generic and configured by command-line options; see [scripts/README.md](scripts/README.md) before reusing it as a submodule.
 
-1. Connect and power the ESP device. It must be able to enter its ROM bootloader.
-2. Select the device from Device Discovery. The selector entry contains its chip type, serial port, and MAC address.
-3. In Firmware Layout, choose the binary for the permanent first row and enter its target address. Every row defaults to `0x0000`.
-4. Add up to four more partitions as needed. Added rows can be removed; the first row cannot.
-5. Select the baud rate and choose `Flash Program`.
+Run the backend tests with:
 
-The app runs `python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write-flash` in a background thread. The circular Abort button is unavailable until this command starts and requests process termination when selected.
+```sh
+python -m unittest discover -s tests
+```
 
-## Serial Monitor
+## Serial-port troubleshooting
 
-1. Select a discovered ESP device.
-2. Choose a Monitor baud rate. This setting is independent from the Flash baud rate.
-3. Select `Connect` to stream serial output into the Monitor console.
-4. Enter text at the bottom of the Monitor view and select `Send` or press Enter.
+### Permission denied or access denied
 
-Send transmits exactly the text entered, encoded as UTF-8. It does not append `LF`, `CR`, or `CRLF` line endings. Select `Disconnect` before starting a flash operation.
+- Close other serial terminals and IDE serial monitors, then retry.
+- On Linux, check that your account has permission to access the device (commonly through the `dialout` or `uucp` group); log out and back in after changing group membership.
+- Check the operating-system device permissions and USB-to-UART driver. Do not run the application as administrator/root as a routine workaround.
 
-The Monitor console includes `⌫` to clear its output and `↓` to save it as a `.log` or `.txt` file.
+### Port busy or already in use
 
-If Flash targets the device currently connected in Monitor, the application displays a warning. Choose `Disconnect and Proceed` to close that monitor connection and begin flashing, or `Cancel` to leave the monitor connected.
+Only one program can normally own a serial port at a time. Disconnect Espress View's Monitor before flashing, close other terminal/IDE applications using that port, and reconnect or rescan the device. If a previous process exited unexpectedly, make sure it has released the port before trying again.
 
-## Logs
+### Device is not discovered
 
-The log panel starts collapsed to keep the main window compact. Select the down-arrow control to expand it and the up-arrow control to collapse it.
+Discovery requires a powered ESP device able to respond to the ROM bootloader handshake. Check the cable, driver, selected port, power, and boot/reset state, then select **Rescan**. More details are in the [user manual](docs/user-manual.md).
 
-When expanded, the log toolbar provides these icon controls:
+## Documentation
 
-- `⌫` clears the current console output.
-- `↓` saves the current console output to a `.log` or `.txt` file.
+- [Architecture](docs/architecture.md)
+- [Bootloader protocols](docs/bootloader-protocols.md)
+- [Packaging guide](docs/packaging-guide.md)
+- [User manual](docs/user-manual.md)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [License](LICENSE)
 
-## Device Discovery
+## Project layout
 
-The initial device scan runs a short `esptool read-mac` handshake on every visible serial port. Only responding ESP devices appear in the selector, identified by their serial port and MAC address. A device must be powered, connected, and able to enter its ROM bootloader for the handshake to succeed.
-
-Use `Rescan` after connecting, disconnecting, or resetting a device.
-
-## Project Files
-
-```txt
+```text
 espress_view/
-├── main.py             # CustomTkinter application
-├── requirements.txt    # Runtime dependencies
-├── README.md           # Installation and use guide
-├── scripts/
-│   ├── build_script.py  # Executable build and clean utility
-│   └── requirements.txt  # Build-only dependencies
-└── docs/
-    ├── blueprint.md    # Current application specification
-    └── summary.md      # Technical and implementation summary
+├── assets/
+│   └── icons/                      # Application and control icons (.ico, .png, .svg)
+│
+├── docs/                           # Documentation guides
+│   ├── architecture.md             # System design, threading, and Mermaid diagrams
+│   ├── bootloader-protocols.md     # Flashing sequence and protocol specifications
+│   ├── packaging-guide.md          # PyInstaller bundling instructions
+│   └── user-manual.md              # End-user operations and troubleshooting
+│
+├── scripts/                        # Build scripts & automation
+│   ├── build_executable.py         # PyInstaller build runner & post-packaging script
+│   └── espress_view.spec           # PyInstaller specification file
+│
+├── src/
+│   └── espress_view/
+│       ├── __init__.py             # Package version (__version__) and metadata
+│       ├── __main__.py             # Module execution entry point (python -m espress_view)
+│       │
+│       ├── core/                   # Device discovery and serial-monitor I/O
+│       │   ├── __init__.py
+│       │   ├── discovery.py        # USB/COM port enumeration and auto-detect
+│       │   ├── serial_worker.py    # Background PySerial thread reader/writer
+│       │   └── logger.py           # Stream logging and raw data capture
+│       │
+│       ├── flasher/                # Firmware validation and esptool process management
+│       │   ├── __init__.py
+│       │   ├── esptool_wrapper.py  # esptool execution, argument building, subprocess runner
+│       │   ├── validator.py        # Chip detection, partition table, and binary offset checks
+│       │   └── progress_parser.py  # Regex/stream parser to extract flashing % into events
+│       │
+│       ├── gui/                    # CustomTkinter application window
+│       │   ├── __init__.py
+│       │   ├── app.py              # Root CTk window, main loop, queue event listener (.after())
+│       │   ├── frames/             # Major layout panes (CTkFrame)
+│       │   │   ├── __init__.py
+│       │   │   ├── connection_pane.py  # COM port & baud rate selection
+│       │   │   ├── monitor_pane.py     # Serial terminal output view
+│       │   │   └── flasher_pane.py     # Binary selector, chip settings, flash progress
+│       │   └── widgets/            # Reusable UI controls
+│       │       ├── __init__.py
+│       │       └── port_combobox.py
+│       │
+│       └── utils/                  # Resource paths and single-instance guard
+│           ├── __init__.py
+│           ├── single_instance.py  # Lockfile / socket guard against multiple app instances
+│           ├── paths.py            # Resolves asset paths across dev & frozen PyInstaller bundles
+│           └── config.py           # User preferences persistence (theme, last baud rate)
+│
+├── tests/                          # Backend unit & integration tests
+│   ├── __init__.py
+│   ├── test_discovery.py           # Port detection tests
+│   ├── test_esptool_wrapper.py     # Mock subprocess and progress parsing tests
+│   └── test_serial_worker.py       # Serial mock loop tests
+│
+├── .gitignore
+├── CHANGELOG.md                    # Release history
+├── CONTRIBUTING.md                 # Development & PR guidelines
+├── LICENSE                         # License terms (e.g., MIT, Apache 2.0)
+├── README.md                       # Main repo landing page and overview
+├── pyproject.toml                  # Modern build definitions & package dependencies
+└── requirements.txt                # Locked dependencies (customtkinter, pyserial, esptool)
 ```

@@ -1,93 +1,26 @@
 #!/usr/bin/env python3
-"""
-     File: main.py
-   Author: Project contributors
-    Brief: Discover ESP devices and flash selected firmware partitions
-  Created: 2026-09-03
-    Updated: 2026-09-03
-    Version: v0.4.0
+"""CustomTkinter frontend for device discovery, monitoring, and flashing."""
 
-Copyright: (c) 2026 Project contributors.
-
-Description:
-    Provides the CustomTkinter desktop interface and the background process
-    management needed to discover serial devices and invoke esptool safely.
-"""
-
-import ctypes
 import logging
 import queue
 import re
-import subprocess
-import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import TclError, filedialog
 
 import customtkinter as ctk
-import esptool
 import serial
 from PIL import Image, ImageTk
-from esptool.util import FatalError
-from serial.tools import list_ports
+
+from espress_view.config import BAUD_RATES, MAX_PARTITIONS
+from espress_view.core import serial_monitor
+from espress_view.core.device_discovery import discover_devices
+from espress_view.flasher.arguments import build_flash_arguments
+from espress_view.flasher.runner import FlashRunner, esptool_worker_command
+from espress_view.utils.paths import resource_path
 
 LOGGER = logging.getLogger(__name__)
-SINGLE_INSTANCE_MUTEX = "Local\\EspressViewSingleInstance"
-ERROR_ALREADY_EXISTS = 183
-MAX_PARTITIONS = 5
-BAUD_RATES = (
-    "9600", "14400", "19200", "28800", "38400", "57600", "74880", "76800", "115200", "128000", "153600",
-    "230400", "256000", "460800", "512000", "576000", "921600", "1000000", "1500000", "2000000",
-)
-
-_instance_state = {"handle": None}
-
-
-def acquire_single_instance() -> bool:
-    """Acquire the process-wide Windows mutex used to prevent duplicate launches."""
-    if sys.platform != "win32":
-        return True
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
-    kernel32.CreateMutexW.restype = ctypes.c_void_p
-    mutex_handle = kernel32.CreateMutexW(None, True, SINGLE_INSTANCE_MUTEX)
-    if not mutex_handle:
-        raise ctypes.WinError(ctypes.get_last_error())
-    if ctypes.get_last_error() == ERROR_ALREADY_EXISTS:
-        kernel32.CloseHandle(mutex_handle)
-        return False
-    _instance_state["handle"] = int(mutex_handle)
-    return True
-
-
-def release_single_instance() -> None:
-    """Release the Windows mutex held by this application process."""
-    mutex_handle = _instance_state["handle"]
-    if mutex_handle is None or sys.platform != "win32":
-        return
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CloseHandle(ctypes.c_void_p(mutex_handle))
-    _instance_state["handle"] = None
-
-
-def esptool_worker_command(arguments: list[str]) -> list[str]:
-    """Build a command that runs the bundled esptool worker in any launch mode."""
-    if getattr(sys, "frozen", False):
-        return [sys.executable, "--esptool-worker", *arguments]
-    return [sys.executable, str(Path(__file__).resolve()), "--esptool-worker", *arguments]
-
-
-def run_esptool_worker(arguments: list[str]) -> int:
-    """Run esptool inside the current Python or packaged executable process."""
-    try:
-        esptool.main(arguments)
-    except SystemExit as error:
-        return int(error.code) if isinstance(error.code, int) else 1
-    except FatalError as error:
-        print(f"ERROR: {error}", file=sys.stderr)
-        return 1
-    return 0
 
 
 @dataclass
@@ -166,10 +99,10 @@ class EspressView(ctk.CTk):
         self.title("Espress View")
         self.geometry("1040x540")
         self.minsize(860, 540)
-        self._application_icon = ImageTk.PhotoImage(Image.open(Path(__file__).parent / "icons" / "exe-file.ico"))
+        self._application_icon = ImageTk.PhotoImage(Image.open(resource_path("icons", "exe-file.ico")))
         self.iconphoto(True, self._application_icon)
-        self._active_process: subprocess.Popen[str] | None = None
-        self._process_lock = threading.Lock()
+        self._flash_runner = FlashRunner()
+        self._flash_busy = False
         self._event_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._partitions: list[Partition] = []
         self._monitor_serial: serial.Serial | None = None
@@ -202,7 +135,7 @@ class EspressView(ctk.CTk):
 
     def _load_icons(self) -> dict[str, ctk.CTkImage]:
         """Load white control icons while retaining the original image alpha masks."""
-        icon_directory = Path(__file__).parent / "icons"
+        icon_directory = resource_path("icons")
         icon_sizes = {
             "abort": (16, 16),
             "clear": (16, 16),
@@ -549,7 +482,7 @@ class EspressView(ctk.CTk):
         if self._monitor_serial is not None:
             self.disconnect_monitor()
             return
-        if self._active_process is not None:
+        if self._flash_busy:
             self._write_monitor_log("Wait for the flash operation to finish before connecting the monitor.\n")
             return
         port = self._selected_port()
@@ -557,7 +490,7 @@ class EspressView(ctk.CTk):
             self._write_monitor_log("Select a serial device before connecting.\n")
             return
         try:
-            connection = serial.Serial(port=port, baudrate=int(self.monitor_baud_var.get()), timeout=0.2)
+            connection = serial_monitor.connect(port, int(self.monitor_baud_var.get()))
         except (serial.SerialException, ValueError, OSError) as error:
             LOGGER.error("Could not connect serial monitor: %s", error)
             self._write_monitor_log(f"Could not connect to {port}: {error}\n")
@@ -579,7 +512,7 @@ class EspressView(ctk.CTk):
             if connection is None:
                 break
             try:
-                data = connection.read(connection.in_waiting or 1)
+                data = serial_monitor.read(connection)
             except (serial.SerialException, OSError) as error:
                 self._event_queue.put(("monitor-error", str(error)))
                 break
@@ -610,7 +543,7 @@ class EspressView(ctk.CTk):
             self._write_monitor_log("Connect the monitor before sending data.\n")
             return "break" if _event is not None else None
         try:
-            connection.write(message.encode("utf-8"))
+            serial_monitor.send(connection, message)
         except (serial.SerialException, OSError) as error:
             LOGGER.error("Could not send monitor data: %s", error)
             self._write_monitor_log(f"Send failed: {error}\n")
@@ -649,33 +582,15 @@ class EspressView(ctk.CTk):
     def _scan_worker(self) -> None:
         """Handshake each serial port and return ESP devices with their MAC addresses."""
         try:
-            ports = list_ports.comports()
+            devices = discover_devices()
         except OSError as error:
             LOGGER.error("Serial device scan failed: %s", error)
             self._event_queue.put(("console", f"Device scan failed: {error}\n"))
             self._event_queue.put(("devices", ""))
             return
-        devices = []
-        for port in ports:
-            try:
-                result = subprocess.run(
-                    esptool_worker_command(["--port", port.device, "read-mac"]),
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=6,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired) as error:
-                LOGGER.info("ESP handshake skipped for %s: %s", port.device, error)
-                continue
-            mac_address = re.search(r"MAC:\s*((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})", result.stdout)
-            chip_type = re.search(r"(?:Chip is|Detected chip type:)\s*(ESP[^\r\n]+)", result.stdout)
-            if mac_address is not None:
-                chip_name = chip_type.group(1).strip() if chip_type is not None else "ESP device"
-                devices.append("\t".join((chip_name, port.device, mac_address.group(1).upper())))
-        self._event_queue.put(("devices", "\n".join(devices)))
+        self._event_queue.put(
+            ("devices", "\n".join("\t".join((device.chip_type, device.port, device.mac_address)) for device in devices))
+        )
 
     def flash_program(self) -> None:
         """Validate the configuration and start the selected esptool operation."""
@@ -689,22 +604,19 @@ class EspressView(ctk.CTk):
             else:
                 self._write_console("Disconnect the active serial monitor before flashing another device.\n")
             return
-        arguments = ["--chip", "auto", "--port", port, "--baud", self.baud_var.get(), "write-flash"]
-        for partition in self._partitions:
-            binary = Path(partition.file_path.get())
-            try:
-                address = int(partition.address.get(), 0)
-            except ValueError:
-                self._write_console(f"Invalid flash address: {partition.address.get()}\n")
-                return
-            if not binary.is_file():
-                self._write_console(f"Firmware file not found: {binary}\n")
-                return
-            arguments.extend([f"0x{address:x}", str(binary)])
-        with self._process_lock:
-            if self._active_process is not None:
-                self._write_console("A flash operation is already running.\n")
-                return
+        if self._flash_busy:
+            self._write_console("A flash operation is already running.\n")
+            return
+        try:
+            arguments = build_flash_arguments(
+                port,
+                self.baud_var.get(),
+                [(partition.file_path.get(), partition.address.get()) for partition in self._partitions],
+            )
+        except ValueError as error:
+            self._write_console(f"{error}\n")
+            return
+        self._flash_busy = True
         self.status_var.set("Flashing...")
         self.progress_var.set(0)
         self.progress_text_var.set("0%")
@@ -744,41 +656,25 @@ class EspressView(ctk.CTk):
     def _flash_worker(self, arguments: list[str]) -> None:
         """Run esptool, forwarding its combined output to the UI queue."""
         try:
-            with self._process_lock:
-                self._active_process = subprocess.Popen(
-                    esptool_worker_command(arguments),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-                process = self._active_process
-            if process.stdout is not None:
-                for line in process.stdout:
-                    self._event_queue.put(("console", line))
-                    percentage = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
-                    if percentage is not None:
-                        self._event_queue.put(("progress", percentage.group(1)))
-            exit_code = process.wait()
+            def forward_output(line: str) -> None:
+                self._event_queue.put(("console", line))
+                percentage = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
+                if percentage is not None:
+                    self._event_queue.put(("progress", percentage.group(1)))
+
+            exit_code = self._flash_runner.run(arguments, forward_output)
             self._event_queue.put(("complete", str(exit_code)))
         except OSError as error:
             LOGGER.error("Could not start esptool: %s", error)
             self._event_queue.put(("console", f"Unable to start esptool: {error}\n"))
             self._event_queue.put(("complete", "startup-error"))
-        finally:
-            with self._process_lock:
-                self._active_process = None
 
     def abort_flash(self) -> None:
         """Terminate the active esptool process, if a flash is underway."""
-        with self._process_lock:
-            process = self._active_process
-        if process is None or process.poll() is not None:
+        if not self._flash_runner.terminate():
             self._write_console("No active flash operation to abort.\n")
             self._set_abort_disabled()
             return
-        process.terminate()
         self.status_var.set("Aborting...")
         self._set_abort_disabled()
         self._write_console("Abort requested.\n")
@@ -847,6 +743,7 @@ class EspressView(ctk.CTk):
                 self.status_var.set(f"Found {len(devices)} serial device(s)")
                 self._write_console(f"Scan complete: {len(devices)} serial device(s) found.\n")
             elif event == "complete":
+                self._flash_busy = False
                 self.status_var.set("Ready" if value == "0" else f"Flash ended ({value})")
                 self._set_abort_disabled()
                 self._write_console(f"esptool completed with status: {value}\n")
@@ -880,30 +777,5 @@ class EspressView(ctk.CTk):
         """Close active device resources before destroying the main window."""
         if self._monitor_serial is not None:
             self.disconnect_monitor()
-        with self._process_lock:
-            process = self._active_process
-        if process is not None and process.poll() is None:
-            process.terminate()
+        self._flash_runner.terminate()
         self.destroy()
-
-
-def main() -> None:
-    """Configure logging and run the Espress View application."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-    if not acquire_single_instance():
-        LOGGER.warning("Espress View is already running")
-        return
-    application = EspressView()
-    try:
-        application.mainloop()
-    except KeyboardInterrupt:
-        LOGGER.warning("Application interrupted from the terminal")
-        application.close_application()
-    finally:
-        release_single_instance()
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--esptool-worker":
-        raise SystemExit(run_esptool_worker(sys.argv[2:]))
-    main()

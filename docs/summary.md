@@ -10,12 +10,19 @@ This release includes serial monitoring, shared navigation, icon-based controls 
 
 ## Implemented Architecture
 
-- `main.py` owns the CustomTkinter window, device selection, partition state, flash control, progress state, and log view.
+- `src/espress_view/gui/app.py` owns the CustomTkinter window, device selection, partition state, flash controls, progress state, and log views.
+- `src/espress_view/core/device_discovery.py` performs serial-port enumeration and esptool handshakes.
+- `src/espress_view/core/serial_monitor.py` opens, reads, and writes the selected monitor port.
+- `src/espress_view/flasher/arguments.py` validates firmware rows and constructs esptool arguments.
+- `src/espress_view/flasher/runner.py` runs and stops the esptool child process.
+- `src/espress_view/__main__.py` is the package entry point and handles the internal worker mode.
+- `scripts/build.py` is a generic PyInstaller helper; the project supplies entry point, resources, name, and optional version metadata as CLI options.
+- `tests/test_services.py` verifies firmware validation, ESP discovery filtering, serial-text behavior, and the package worker command.
 - PySerial enumerates operating-system serial ports, including Windows COM ports and Unix-style device nodes.
-- A background device-scan thread sends `esptool read-mac` results to the Tk thread through an event queue.
-- A separate flash worker starts `python -m esptool write-flash`, combines its output streams, and forwards output and progress events through the same queue.
-- The serial monitor opens the selected COM port at its independently selected baud rate and reads incoming bytes on its own background thread.
-- A lock protects the active subprocess so the circular Abort action can safely terminate the current operation.
+- Background device-scan and serial-monitor threads deliver results to Tk through an event queue.
+- The flash runner combines esptool output streams, forwards progress, and protects the active subprocess while it is aborted or closed.
+- `assets/icons` stores the application and control icons outside the Python source package.
+- `pyproject.toml` configures setuptools to package the `src` layout and install runtime icons.
 
 ## Interface Behavior
 
@@ -34,6 +41,6 @@ ESP programming requires a powered device, a compatible USB-to-UART driver, and 
 
 ## Validation Performed
 
-- Dependencies are installed in the project `.venv`.
-- The GUI constructor, partition invariants, and log expand/collapse behavior have been checked using the selected Python interpreter.
-- `main.py` passes Python bytecode compilation and has no editor diagnostics.
+- Eight backend unit tests pass.
+- The frontend imports with application icons resolved from the top-level assets directory.
+- The configured generic PyInstaller command produces a one-file executable whose bundled esptool worker starts successfully.

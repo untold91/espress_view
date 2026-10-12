@@ -12,8 +12,15 @@ Version 0.4.0 includes the Monitor workspace, shared Device Discovery navigation
 
 - GUI: CustomTkinter.
 - Serial discovery: PySerial enumerates candidate ports.
-- ESP identification and programming: `python -m esptool`.
+- ESP identification and programming: esptool runs in a child process.
 - Background execution: Python threads and a queue keep Tk UI updates on the main thread.
+- Application code: installable `src/espress_view` package with separate `core`, `flasher`, and `gui` modules.
+
+## Application Structure
+
+The `gui` package owns the CustomTkinter window, widgets, event queue, and user interactions. The `core` package owns serial-device discovery and serial-monitor I/O without depending on Tkinter. The `flasher` package validates firmware rows and manages the esptool child process. Icons are stored in the top-level `assets/icons` directory. The package `__main__.py` starts either the desktop application or the internal esptool worker. Run the installed application with `python -m espress_view`. See [architecture](architecture.md), [bootloader protocol notes](bootloader-protocols.md), [packaging](packaging-guide.md), and the [user manual](user-manual.md).
+
+The shared `scripts/build.py` helper is application-agnostic and receives entry point, asset, executable, and metadata settings from its command line. See [scripts/README.md](../scripts/README.md) for integration and submodule usage.
 
 ## Device Discovery
 
@@ -54,7 +61,7 @@ Firmware Layout uses a dynamic partition list with these rules:
 Flash Program validates the selected device, binary paths, and hexadecimal addresses before starting an asynchronous command equivalent to:
 
 ```powershell
-python -m esptool --chip auto --port COM_ID --baud BAUD_RATE write-flash ADDRESS BINARY
+python -m espress_view --esptool-worker --chip auto --port COM_ID --baud BAUD_RATE write-flash ADDRESS BINARY
 ```
 
 The application streams combined standard output and error into the retained log. Percentage values reported by `esptool` update the progress bar and its text label. The circular red Abort button remains disabled until the process begins and terminates the active process when selected.

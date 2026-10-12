@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Other files and directories to ignore
+*.log
+*.logs
+logs/
+*.zip
+
+# Shared build tooling will be added as a submodule later
+/scripts/

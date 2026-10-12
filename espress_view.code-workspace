@@ -1,6 +1,7 @@
 {
 	"folders": [
 		{
+			"name": "application",
 			"path": "."
 		}
 	],
@@ -15,25 +16,17 @@
 					"color": "#81A1C1", /* Nord Ice Blue — cool and calming */
 					"singleInstance": true,
 					"terminalName": "Build-Clean",
-					"command": "py scripts/build_script.py -b main.py",
+					"command": "python scripts\\build.py build --entry src\\espress_view\\__main__.py --name espress_view --paths src --add-data assets=assets --collect-data esptool --icon assets\\icons\\exe-file.ico --metadata metadata.yaml",
 					"cwd": "${workspaceFolder}"
 				},
 				{
-					"tooltip": "Clean",
-					"name": "$(trash)",
+					"tooltip": "Clean build outputs",
+					"name": "$(clear-all)",
 					"color": "#D08770", /* Muted Terracotta — soft burnt orange */
 					"singleInstance": true,
 					"terminalName": "Build-Clean",
-					"command": "py scripts/build_script.py -c",
+					"command": "python scripts\\build.py clean",
 					"cwd": "${workspaceFolder}"
-				},
-				{
-					"tooltip": "Run/Debug",
-					"name": "$(debug-alt)",
-					"color": "#BF616A", /* Nord Red — dusty brick red */
-					"singleInstance": true,
-					"useVsCodeApi": true,
-					"command": "workbench.action.debug.start"
 				}
 			],
 		}
@@ -45,7 +38,7 @@
 				"name": "Python Debugger",
 				"type": "debugpy",
 				"request": "launch",
-				"program": "${workspaceFolder}/main.py",
+				"module": "espress_view",
 				"console": "integratedTerminal"
 			}
 		]
