@@ -4,10 +4,11 @@
 import logging
 import queue
 import re
+import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import TclError, filedialog
+from tkinter import Event, TclError, filedialog
 
 import customtkinter as ctk
 import serial
@@ -30,7 +31,8 @@ from espress_view.gui.design import (
     SPACE_XS,
     color,
 )
-from espress_view.gui.icons import ICON_NAMES, render_icon
+from espress_view.gui.icons import ICON_NAMES, load_icon
+from espress_view.gui.widgets import ChevronOptionMenu
 
 LOGGER = logging.getLogger(__name__)
 MAX_CONSOLE_LINES = 5000
@@ -65,6 +67,7 @@ class Tooltip:
         self.widget.bind("<Enter>", self.schedule_show, add="+")
         self.widget.bind("<Leave>", self.hide, add="+")
         self.widget.bind("<ButtonPress>", self.hide, add="+")
+        self.widget.bind("<FocusIn>", self.schedule_show, add="+")
         self.widget.bind("<FocusOut>", self.hide, add="+")
         self.widget.bind("<Unmap>", self.hide, add="+")
         self.widget.bind("<Destroy>", self.hide, add="+")
@@ -153,7 +156,10 @@ class EspressView(ctk.CTk):
         self.log_visible = False
         self._event_after_id: str | None = None
         self._icons = self._load_icons()
+        self._action_icons = self._load_action_icons()
+        self._status_icons = self._load_status_icons()
         self._build_interface()
+        self._set_flash_status("Ready")
         self.protocol("WM_DELETE_WINDOW", self.close_application)
         self._drain_events()
         self.after(200, self.scan_devices)
@@ -180,19 +186,80 @@ class EspressView(ctk.CTk):
         """Attach a concise hover tooltip to an icon-only control."""
         Tooltip(widget, text)
 
+    @staticmethod
+    def _add_focus_indicator(widget: ctk.CTkBaseClass) -> None:
+        """Show an accent outline while a keyboard-operable control has focus."""
+        base_width = widget.cget("border_width")
+        base_color = widget.cget("border_color")
+        widget.bind(
+            "<FocusIn>",
+            lambda _event: widget.configure(border_width=2, border_color=color("accent")),
+            add="+",
+        )
+        widget.bind(
+            "<FocusOut>",
+            lambda _event: widget.configure(border_width=base_width, border_color=base_color),
+            add="+",
+        )
+
+    @staticmethod
+    def _add_focus_fill_indicator(widget: ctk.CTkBaseClass) -> None:
+        """Highlight focus for CustomTkinter controls without configurable borders."""
+        base_color = widget.cget("fg_color")
+        widget.bind(
+            "<FocusIn>",
+            lambda _event: widget.configure(fg_color=color("accent_subtle")),
+            add="+",
+        )
+        widget.bind(
+            "<FocusOut>",
+            lambda _event: widget.configure(fg_color=base_color),
+            add="+",
+        )
+
     def _load_icons(self) -> dict[str, ctk.CTkImage]:
-        """Create a coherent icon set with readable colors in either theme."""
+        """Load bundled Lucide icons with theme-aware foreground colours."""
         light_color = color("text_secondary")[0]
         dark_color = color("text_secondary")[1]
         return {
             name: ctk.CTkImage(
-                light_image=render_icon(name, light_color, (72, 72)),
-                dark_image=render_icon(name, dark_color, (72, 72)),
+                light_image=load_icon(name, light_color, (96, 96)),
+                dark_image=load_icon(name, dark_color, (96, 96)),
                 size=(18, 18),
             )
             for name in ICON_NAMES
         }
 
+    def _load_status_icons(self) -> dict[str, ctk.CTkImage]:
+        """Create status icons using the semantic status colours in each theme."""
+        variants = {
+            "Ready": ("plug", "text_muted"),
+            "Starting": ("plug", "accent"),
+            "Flashing": ("zap", "accent"),
+            "Flashed": ("circle-check", "success"),
+            "Aborted": ("circle-x", "warning"),
+            "Failed": ("circle-alert", "error"),
+            "Aborting": ("circle-alert", "warning"),
+        }
+        return {
+            status: ctk.CTkImage(
+                light_image=load_icon(icon, color(token)[0], (72, 72)),
+                dark_image=load_icon(icon, color(token)[1], (72, 72)),
+                size=(16, 16),
+            )
+            for status, (icon, token) in variants.items()
+        }
+
+    def _load_action_icons(self) -> dict[str, ctk.CTkImage]:
+        """Tint primary-action icons for the foreground on their themed buttons."""
+        return {
+            name: ctk.CTkImage(
+                light_image=load_icon(name, color("accent_text")[0], (96, 96)),
+                dark_image=load_icon(name, color("accent_text")[1], (96, 96)),
+                size=(18, 18),
+            )
+            for name in ("plug", "unplug")
+        }
     def _build_interface(self) -> None:
         """Build the shared application shell and both workspaces."""
         self.grid_columnconfigure(1, weight=1)
@@ -245,10 +312,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
         )
         self.monitor_nav.pack(fill="x", pady=3)
+        self._add_focus_indicator(self.monitor_nav)
         self.flash_nav = ctk.CTkButton(
             navigation_actions,
             text="Flash",
-            image=self._icons["flash"],
+            image=self._icons["zap"],
             compound="left",
             command=self.show_flash,
             anchor="w",
@@ -260,6 +328,7 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
         )
         self.flash_nav.pack(fill="x", pady=3)
+        self._add_focus_indicator(self.flash_nav)
         sidebar_footer = ctk.CTkFrame(navigation, fg_color="transparent")
         sidebar_footer.pack(side="bottom", fill="x", padx=SPACE_MD, pady=SPACE_MD)
         ctk.CTkLabel(
@@ -268,23 +337,38 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
             text_color=color("text_muted"),
         ).pack(anchor="w", padx=2, pady=(0, 6))
-        self.theme_var = ctk.StringVar(value=self._settings.theme.title())
-        self.theme_menu = ctk.CTkOptionMenu(
+        self.theme_var = ctk.StringVar(value=self._settings.theme)
+        self.theme_selector = ctk.CTkFrame(
             sidebar_footer,
-            variable=self.theme_var,
-            values=["Dark", "Light", "System"],
-            command=self._change_theme,
-            height=34,
             fg_color=color("surface"),
-            button_color=color("surface_alt"),
-            button_hover_color=color("accent_subtle"),
-            text_color=color("text_secondary"),
-            dropdown_fg_color=color("surface"),
-            dropdown_text_color=color("text"),
-            dropdown_hover_color=color("accent_subtle"),
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            corner_radius=8,
+            border_width=1,
+            border_color=color("border"),
         )
-        self.theme_menu.pack(fill="x")
+        self.theme_selector.pack(fill="x")
+        self.theme_buttons: dict[str, ctk.CTkButton] = {}
+        for column, (mode, icon_name) in enumerate(
+            (("light", "sun"), ("system", "monitor"), ("dark", "moon"))
+        ):
+            self.theme_selector.grid_columnconfigure(column, weight=1, uniform="appearance")
+            button = ctk.CTkButton(
+                self.theme_selector,
+                text="",
+                image=self._icons[icon_name],
+                command=lambda selected=mode: self._change_theme(selected),
+                width=44,
+                height=38,
+                corner_radius=6,
+                fg_color="transparent",
+                hover_color=color("accent_subtle"),
+                text_color=color("text_secondary"),
+            )
+            button.appearance_accessible_name = f"{mode.title()} appearance"
+            button.grid(row=0, column=column, sticky="ew", padx=2, pady=2)
+            self.theme_buttons[mode] = button
+            self._add_tooltip(button, f"{mode.title()} appearance")
+            self._add_focus_indicator(button)
+        self._sync_appearance_selector()
 
         main_area = ctk.CTkFrame(self, fg_color="transparent")
         main_area.grid(row=0, column=1, sticky="nsew", padx=(0, SPACE_LG), pady=SPACE_LG)
@@ -313,7 +397,7 @@ class EspressView(ctk.CTk):
             text_color=color("text_muted"),
         )
         self.device_status_label.grid(row=0, column=1, sticky="e", padx=14, pady=(10, 2))
-        self.port_menu = ctk.CTkOptionMenu(
+        self.port_menu = ChevronOptionMenu(
             device_frame,
             variable=self.port_var,
             values=["No device selected"],
@@ -328,10 +412,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
         )
         self.port_menu.grid(row=1, column=0, columnspan=2, sticky="ew", padx=(14, 8), pady=(2, 10))
+        self._add_focus_fill_indicator(self.port_menu)
         self.scan_button = ctk.CTkButton(
             device_frame,
             text="Rescan",
-            image=self._icons["refresh"],
+            image=self._icons["refresh-cw"],
             command=self.scan_devices,
             width=96,
             height=36,
@@ -342,6 +427,7 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
         )
         self.scan_button.grid(row=1, column=2, padx=(0, 14), pady=(2, 10))
+        self._add_focus_indicator(self.scan_button)
 
         self.view_area = ctk.CTkFrame(main_area, fg_color="transparent")
         self.view_area.grid(row=1, column=0, sticky="nsew")
@@ -416,6 +502,7 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
         )
         self.add_partition_button.grid(row=0, column=2, padx=(12, 0))
+        self._add_focus_indicator(self.add_partition_button)
         self.partitions_frame = ctk.CTkScrollableFrame(
             workspace,
             height=128,
@@ -437,35 +524,20 @@ class EspressView(ctk.CTk):
             border_color=color("border"),
         )
         flash_controls.grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        flash_controls.grid_columnconfigure(1, weight=1)
-        self.flash_button = ctk.CTkButton(
-            flash_controls,
-            text="Flash program",
-            image=self._icons["flash"],
-            compound="left",
-            command=self.flash_program,
-            width=156,
-            height=38,
-            corner_radius=8,
-            fg_color=color("accent"),
-            hover_color=color("accent_hover"),
-            text_color=color("accent_text"),
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-        )
-        self.flash_button.grid(row=0, column=0, rowspan=2, padx=14, pady=12)
+        flash_controls.grid_columnconfigure(3, weight=1)
         self.flash_baud_label = ctk.CTkLabel(
             flash_controls,
             text="Flash baud",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=color("text_secondary"),
         )
-        self.flash_baud_label.grid(row=0, column=1, sticky="w", padx=(4, 8), pady=(10, 0))
-        self.baud_menu = ctk.CTkOptionMenu(
+        self.flash_baud_label.grid(row=0, column=0, padx=(12, 6), pady=8)
+        self.baud_menu = ChevronOptionMenu(
             flash_controls,
             variable=self.baud_var,
             values=list(BAUD_RATES),
             width=122,
-            height=32,
+            height=34,
             fg_color=color("surface_alt"),
             button_color=color("surface_alt"),
             button_hover_color=color("accent_subtle"),
@@ -476,46 +548,70 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             command=self._save_flash_baud,
         )
-        self.baud_menu.grid(row=1, column=1, sticky="w", padx=(4, 8), pady=(2, 10))
+        self.baud_menu.grid(row=0, column=1, padx=(0, 8), pady=8)
         self.status_label = ctk.CTkLabel(
             flash_controls,
             textvariable=self.status_var,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
-            text_color=color("text_secondary"),
+            compound="left",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+            text_color=color("text_muted"),
         )
-        self.status_label.grid(row=0, column=2, sticky="e", padx=(4, 14), pady=(10, 0))
-        self.progress = ctk.CTkProgressBar(
+        self.status_label.grid(row=0, column=2, padx=(2, 10), sticky="w")
+        self.flash_button = ctk.CTkButton(
             flash_controls,
+            text="Flash Program",
+            image=self._icons["zap"],
+            compound="left",
+            command=self.flash_program,
+            width=150,
+            height=34,
+            corner_radius=8,
+            fg_color=color("accent"),
+            hover_color=color("accent_hover"),
+            text_color=color("accent_text"),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+        )
+        self.flash_button.grid(row=0, column=4, padx=(8, 12), pady=8)
+        self._add_focus_indicator(self.flash_button)
+        self._add_focus_fill_indicator(self.baud_menu)
+
+        self.flash_progress_area = ctk.CTkFrame(flash_controls, fg_color="transparent")
+        self.flash_progress_area.grid(row=1, column=0, columnspan=5, sticky="ew", padx=12, pady=(0, 10))
+        self.flash_progress_area.grid_columnconfigure(0, weight=1)
+        self.progress = ctk.CTkProgressBar(
+            self.flash_progress_area,
             variable=self.progress_var,
-            height=8,
+            height=10,
             progress_color=color("accent"),
             fg_color=color("disabled"),
         )
-        self.progress.grid(row=1, column=2, sticky="ew", padx=(4, 14), pady=(4, 13))
+        self.progress.grid(row=0, column=0, sticky="ew", padx=(0, 12))
         self.progress_text_label = ctk.CTkLabel(
-            flash_controls,
+            self.flash_progress_area,
             textvariable=self.progress_text_var,
-            width=116,
+            width=100,
             anchor="e",
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             text_color=color("text_muted"),
         )
-        self.progress_text_label.grid(row=0, column=3, sticky="e", padx=(0, 8), pady=(10, 0))
+        self.progress_text_label.grid(row=0, column=1, sticky="e", padx=(0, 8))
         self.abort_button = ctk.CTkButton(
-            flash_controls,
-            text="",
-            image=self._icons["abort"],
+            self.flash_progress_area,
+            text="Abort",
+            image=self._icons["circle-x"],
+            compound="left",
             command=self.abort_flash,
-            width=34,
-            height=34,
+            width=86,
+            height=30,
             corner_radius=8,
             fg_color="transparent",
             hover_color=color("accent_subtle"),
             text_color=color("error"),
             state="disabled",
         )
-        self.abort_button.grid(row=0, column=4, rowspan=2, padx=(0, 10), pady=8)
-        self._add_tooltip(self.abort_button, "Abort flash")
+        self.abort_button.grid(row=0, column=2, padx=(0, 2))
+        self._add_focus_indicator(self.abort_button)
+        self.flash_progress_area.grid_remove()
 
         self.console_frame = ctk.CTkFrame(
             self.flash_view,
@@ -539,7 +635,7 @@ class EspressView(ctk.CTk):
         clear_button = ctk.CTkButton(
             console_header,
             text="Clear",
-            image=self._icons["clear"],
+            image=self._icons["trash-2"],
             compound="left",
             command=self.clear_log,
             width=74,
@@ -551,10 +647,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
         )
         clear_button.grid(row=0, column=1, padx=2)
+        self._add_focus_indicator(clear_button)
         export_button = ctk.CTkButton(
             console_header,
             text="Export",
-            image=self._icons["export"],
+            image=self._icons["save"],
             compound="left",
             command=self.save_log,
             width=78,
@@ -566,10 +663,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
         )
         export_button.grid(row=0, column=2, padx=2)
+        self._add_focus_indicator(export_button)
         self.log_toggle = ctk.CTkButton(
             console_header,
             text="",
-            image=self._icons["expand"],
+            image=self._icons["chevron-up"],
             command=self.toggle_log,
             width=30,
             height=30,
@@ -578,6 +676,7 @@ class EspressView(ctk.CTk):
             hover_color=color("accent_subtle"),
         )
         self.log_toggle.grid(row=0, column=3, padx=(2, 0))
+        self._add_focus_indicator(self.log_toggle)
         self.log_tooltip = Tooltip(self.log_toggle, "Show flash output")
         self.console = ctk.CTkTextbox(
             self.console_frame,
@@ -603,18 +702,23 @@ class EspressView(ctk.CTk):
 
         page_header = ctk.CTkFrame(self.monitor_view, fg_color="transparent")
         page_header.grid(row=0, column=0, sticky="ew", pady=(SPACE_XS, SPACE_MD))
-        ctk.CTkLabel(
+        page_header.grid_columnconfigure(1, weight=1)
+        self.monitor_heading = ctk.CTkLabel(
             page_header,
-            text="Serial monitor",
+            text="Serial Monitor",
             font=ctk.CTkFont(family=FONT_FAMILY, size=24, weight="bold"),
             text_color=color("text"),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
+        )
+        self.monitor_heading.grid(row=0, column=0, sticky="w")
+        self.monitor_description = ctk.CTkLabel(
             page_header,
             text="Inspect live output and send exact UTF-8 text to the connected device.",
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=color("text_secondary"),
-        ).pack(anchor="w", pady=(3, 0))
+            anchor="e",
+        )
+        self.monitor_description.grid(row=0, column=1, sticky="e", padx=(12, 0))
+        page_header.bind("<Configure>", self._layout_monitor_heading, add="+")
 
         controls = ctk.CTkFrame(
             self.monitor_view,
@@ -631,7 +735,7 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=color("text_secondary"),
         ).grid(row=0, column=0, padx=(12, 6), pady=10)
-        self.monitor_baud_menu = ctk.CTkOptionMenu(
+        self.monitor_baud_menu = ChevronOptionMenu(
             controls,
             variable=self.monitor_baud_var,
             values=list(BAUD_RATES),
@@ -648,6 +752,7 @@ class EspressView(ctk.CTk):
             command=self._save_monitor_baud,
         )
         self.monitor_baud_menu.grid(row=0, column=1, padx=(0, 10), pady=8)
+        self._add_focus_fill_indicator(self.monitor_baud_menu)
         self.monitor_status_label = ctk.CTkLabel(
             controls,
             textvariable=self.monitor_status_var,
@@ -658,6 +763,8 @@ class EspressView(ctk.CTk):
         self.monitor_connect_button = ctk.CTkButton(
             controls,
             text="Connect",
+            image=self._action_icons["plug"],
+            compound="left",
             command=self.toggle_monitor_connection,
             width=104,
             height=34,
@@ -668,10 +775,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
         )
         self.monitor_connect_button.grid(row=0, column=4, padx=4, pady=8)
+        self._add_focus_indicator(self.monitor_connect_button)
         monitor_clear_button = ctk.CTkButton(
             controls,
             text="Clear",
-            image=self._icons["clear"],
+            image=self._icons["trash-2"],
             compound="left",
             command=self.clear_monitor_log,
             width=76,
@@ -683,10 +791,11 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
         )
         monitor_clear_button.grid(row=0, column=5, padx=2, pady=8)
+        self._add_focus_indicator(monitor_clear_button)
         monitor_save_button = ctk.CTkButton(
             controls,
             text="Export",
-            image=self._icons["export"],
+            image=self._icons["save"],
             compound="left",
             command=self.save_monitor_log,
             width=80,
@@ -698,6 +807,7 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
         )
         monitor_save_button.grid(row=0, column=6, padx=(2, 10), pady=8)
+        self._add_focus_indicator(monitor_save_button)
 
         terminal = ctk.CTkFrame(
             self.monitor_view,
@@ -736,13 +846,14 @@ class EspressView(ctk.CTk):
             placeholder_text="Type a command (sent exactly as entered; no newline added)",
             height=36,
             state="disabled",
-            fg_color=color("surface_alt"),
+            fg_color=color("input"),
             border_color=color("border"),
             text_color=color("text"),
             placeholder_text_color=color("text_muted"),
             font=ctk.CTkFont(family=FONT_FAMILY, size=12),
         )
         self.command_entry.grid(row=0, column=0, sticky="ew", padx=(10, 8), pady=10)
+        self._add_focus_indicator(self.command_entry)
         self.command_entry.bind("<Return>", self.send_monitor_input)
         self.monitor_send_button = ctk.CTkButton(
             command_frame,
@@ -758,6 +869,7 @@ class EspressView(ctk.CTk):
             state="disabled",
         )
         self.monitor_send_button.grid(row=0, column=1, padx=(0, 10), pady=10)
+        self._add_focus_indicator(self.monitor_send_button)
 
     def show_monitor(self) -> None:
         """Display Monitor without changing the user's window geometry."""
@@ -778,12 +890,48 @@ class EspressView(ctk.CTk):
             self._settings.last_view = "flash"
 
     def _change_theme(self, selected: str) -> None:
-        """Apply and persist the selected CustomTkinter appearance mode."""
-        mode = selected.lower()
+        """Apply and persist a Light, System, or Dark appearance preference."""
+        mode = selected.lower().strip()
         if mode not in {"dark", "light", "system"}:
             raise ValueError(f"Unsupported appearance mode: {selected}")
-        ctk.set_appearance_mode(selected)
+        ctk.set_appearance_mode(mode.title())
+        self.theme_var.set(mode)
         self._settings.theme = mode
+        self._sync_appearance_selector()
+
+    def _sync_appearance_selector(self) -> None:
+        """Keep exactly one appearance segment selected."""
+        selected = self.theme_var.get()
+        for mode, button in self.theme_buttons.items():
+            active = mode == selected
+            button.configure(
+                fg_color=color("accent_subtle") if active else "transparent",
+                text_color=color("accent") if active else color("text_secondary"),
+            )
+
+    def _layout_monitor_heading(self, event: Event) -> None:
+        """Wrap the description only when the heading row cannot fit on one line."""
+        available_width = event.width - self.monitor_heading.winfo_reqwidth() - 24
+        self.monitor_description.configure(wraplength=max(160, min(520, available_width)))
+
+    def _set_flash_status(self, status: str) -> None:
+        """Update the visible flash lifecycle state and its semantic icon."""
+        if status not in self._status_icons:
+            raise ValueError(f"Unsupported flash status: {status}")
+        status_colors = {
+            "Ready": "text_muted",
+            "Starting": "accent",
+            "Flashing": "accent",
+            "Flashed": "success",
+            "Aborted": "warning",
+            "Failed": "error",
+            "Aborting": "warning",
+        }
+        self.status_var.set(status)
+        self.status_label.configure(
+            image=self._status_icons[status],
+            text_color=color(status_colors[status]),
+        )
 
     def _save_monitor_baud(self, selected: str) -> None:
         """Persist the Monitor's independently selected baud rate."""
@@ -816,7 +964,7 @@ class EspressView(ctk.CTk):
             textvariable=file_path,
             placeholder_text="Firmware binary (.bin)",
             height=32,
-            fg_color=color("surface"),
+            fg_color=color("input"),
             border_color=color("border"),
             text_color=color("text"),
             placeholder_text_color=color("text_muted"),
@@ -826,7 +974,7 @@ class EspressView(ctk.CTk):
         browse_button = ctk.CTkButton(
             row,
             text="Browse",
-            image=self._icons["browse"],
+            image=self._icons["folder-open"],
             compound="left",
             width=78,
             height=32,
@@ -837,13 +985,14 @@ class EspressView(ctk.CTk):
             font=ctk.CTkFont(family=FONT_FAMILY, size=11),
         )
         browse_button.grid(row=0, column=2, padx=2, pady=4)
+        self._add_focus_indicator(browse_button)
         address_entry = ctk.CTkEntry(
             row,
             textvariable=address,
             width=110,
             height=32,
             placeholder_text="0x1000",
-            fg_color=color("surface"),
+            fg_color=color("input"),
             border_color=color("border"),
             text_color=color("text"),
             placeholder_text_color=color("text_muted"),
@@ -853,7 +1002,7 @@ class EspressView(ctk.CTk):
         remove_button = ctk.CTkButton(
             row,
             text="",
-            image=self._icons["remove"],
+            image=self._icons["trash-2"],
             width=30,
             height=30,
             corner_radius=7,
@@ -875,6 +1024,7 @@ class EspressView(ctk.CTk):
         browse_button.configure(command=lambda: self._choose_file(partition))
         remove_button.configure(command=lambda: self.remove_partition(partition))
         remove_button.grid(row=0, column=4, padx=(0, 4), pady=4)
+        self._add_focus_indicator(remove_button)
         self._add_tooltip(remove_button, "Remove partition")
         self._partitions.append(partition)
         self._refresh_partition_controls()
@@ -951,6 +1101,7 @@ class EspressView(ctk.CTk):
         self.monitor_status_label.configure(text_color=color("success"))
         self.monitor_connect_button.configure(
             text="Disconnect",
+            image=self._action_icons["unplug"],
             fg_color=color("error"),
             hover_color=color("error"),
             text_color=color("accent_text"),
@@ -988,6 +1139,7 @@ class EspressView(ctk.CTk):
         self.monitor_status_label.configure(text_color=color("text_muted"))
         self.monitor_connect_button.configure(
             text="Connect",
+            image=self._action_icons["plug"],
             fg_color=color("accent"),
             hover_color=color("accent_hover"),
             text_color=color("accent_text"),
@@ -1024,6 +1176,7 @@ class EspressView(ctk.CTk):
     def save_monitor_log(self) -> None:
         """Save retained serial-monitor output to a user-selected text file."""
         destination = filedialog.asksaveasfilename(
+            initialfile="esp_monitor.log",
             defaultextension=".log",
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1092,6 +1245,7 @@ class EspressView(ctk.CTk):
             return
         port = self._selected_port()
         if not port:
+            self._set_flash_status("Failed")
             self._write_console("Select a serial device before flashing.\n")
             return
         if self._monitor_serial is not None:
@@ -1107,21 +1261,32 @@ class EspressView(ctk.CTk):
                 [(partition.file_path.get(), partition.address.get()) for partition in self._partitions],
             )
         except ValueError as error:
+            self._set_flash_status("Failed")
             self._write_console(f"{error}\n")
             return
         self._flash_busy = True
         self._flash_abort_requested.clear()
-        self.status_var.set("Preparing flash…")
-        self.status_label.configure(text_color=color("warning"))
         self.progress_var.set(0)
-        self.progress_text_var.set("Waiting for progress")
+        self.progress_text_var.set("Working…")
+        self.progress.configure(mode="indeterminate")
+        self.progress.start()
+        self.flash_progress_area.grid()
+        self._set_flash_status("Starting")
         self._set_scan_controls(False)
         self._refresh_partition_controls()
         self.monitor_connect_button.configure(state="disabled")
-        self.abort_button.configure(state="normal", fg_color="transparent", hover_color=color("accent_subtle"))
+        self._set_abort_disabled()
         self._write_console(f"$ {' '.join(esptool_worker_command(arguments))}\n")
         self._flash_thread = threading.Thread(target=self._flash_worker, args=(arguments,), daemon=True)
-        self._flash_thread.start()
+        try:
+            self._flash_thread.start()
+        except RuntimeError as error:
+            LOGGER.error("Could not start flash worker: %s", error)
+            self.progress.stop()
+            self._set_flash_busy(False)
+            self._set_flash_status("Failed")
+            self.progress_text_var.set("Failed")
+            self._write_console(f"Unable to start flash operation: {error}\n")
 
     def _show_monitor_warning(self) -> None:
         """Ask whether to disconnect the selected monitored device before flashing."""
@@ -1175,10 +1340,14 @@ class EspressView(ctk.CTk):
                 if percentage is not None:
                     self._event_queue.put(("progress", percentage.group(1)))
 
-            exit_code = self._flash_runner.run(arguments, forward_output)
-            result = "aborted" if self._flash_abort_requested.is_set() else str(exit_code)
+            exit_code = self._flash_runner.run(
+                arguments,
+                forward_output,
+                on_started=lambda: self._event_queue.put(("started", "")),
+            )
+            result = "aborted" if self._flash_abort_requested.is_set() and exit_code != 0 else str(exit_code)
             self._event_queue.put(("complete", result))
-        except OSError as error:
+        except (OSError, subprocess.SubprocessError, ValueError) as error:
             LOGGER.error("Could not start esptool: %s", error)
             self._event_queue.put(("console", f"Unable to start esptool: {error}\n"))
             self._event_queue.put(("complete", "startup-error"))
@@ -1190,8 +1359,7 @@ class EspressView(ctk.CTk):
             self._set_abort_disabled()
             return
         self._flash_abort_requested.set()
-        self.status_var.set("Aborting…")
-        self.status_label.configure(text_color=color("warning"))
+        self._set_flash_status("Aborting")
         self._set_abort_disabled()
         self._write_console("Abort requested.\n")
 
@@ -1209,7 +1377,7 @@ class EspressView(ctk.CTk):
             state="disabled" if busy or self._scan_active or self._monitor_serial is not None else "normal"
         )
         if not busy:
-            self.abort_button.configure(state="disabled")
+            self._set_abort_disabled()
 
     def toggle_log(self) -> None:
         """Expand the flash output within its own layout without resizing the window."""
@@ -1220,14 +1388,14 @@ class EspressView(ctk.CTk):
             self.flash_workspace.grid_propagate(False)
             self.flash_view.grid_rowconfigure(1, weight=0)
             self.flash_view.grid_rowconfigure(3, weight=1)
-            self.log_toggle.configure(image=self._icons["collapse"])
+            self.log_toggle.configure(image=self._icons["chevron-down"])
             self.log_tooltip.text = "Hide flash output"
         else:
             self.console.grid_remove()
             self.flash_workspace.grid_propagate(True)
             self.flash_view.grid_rowconfigure(1, weight=1)
             self.flash_view.grid_rowconfigure(3, weight=0)
-            self.log_toggle.configure(image=self._icons["expand"])
+            self.log_toggle.configure(image=self._icons["chevron-up"])
             self.log_tooltip.text = "Show flash output"
         self._settings.show_flash_logs = self.log_visible
 
@@ -1238,6 +1406,7 @@ class EspressView(ctk.CTk):
     def save_log(self) -> None:
         """Save retained console output to a user-selected text file."""
         destination = filedialog.asksaveasfilename(
+            initialfile="esp_flash.log",
             defaultextension=".log",
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1293,31 +1462,35 @@ class EspressView(ctk.CTk):
                 self.device_status_var.set("Device scan failed")
                 self.device_status_label.configure(text_color=color("error"))
                 console_messages.append(f"Device scan failed: {value}\n")
+            elif event == "started":
+                if self._flash_busy and not self._flash_abort_requested.is_set():
+                    self._set_flash_status("Flashing")
+                    self.abort_button.configure(state="normal")
             elif event == "complete":
                 self._set_flash_busy(False)
                 self._set_abort_disabled()
+                self.progress.stop()
                 if value == "0":
-                    self.status_var.set("Completed")
-                    self.status_label.configure(text_color=color("success"))
-                    self.progress_var.set(1)
-                    self.progress_text_var.set("100%")
+                    self._set_flash_status("Flashed")
+                    self.progress_text_var.set("Complete")
                     console_messages.append("Flash completed successfully.\n")
                 elif value == "aborted":
-                    self.status_var.set("Aborted")
-                    self.status_label.configure(text_color=color("warning"))
+                    self._set_flash_status("Aborted")
                     self.progress_text_var.set("Aborted")
                     console_messages.append("Flash operation aborted.\n")
                 else:
-                    self.status_var.set(f"Failed ({value})")
-                    self.status_label.configure(text_color=color("error"))
+                    self._set_flash_status("Failed")
                     self.progress_text_var.set("Failed")
                     console_messages.append(f"Flash failed with status: {value}\n")
             elif event == "progress":
                 percentage = min(max(float(value), 0), 100)
+                if self.status_var.get() != "Aborting":
+                    self.progress.stop()
+                    self.progress.configure(mode="determinate")
                 self.progress_var.set(percentage / 100)
                 self.progress_text_var.set(f"{percentage:.0f}%")
-                self.status_var.set("Flashing…")
-                self.status_label.configure(text_color=color("accent"))
+                if self.status_var.get() != "Aborting":
+                    self._set_flash_status("Flashing")
         if console_messages:
             self._write_console("".join(console_messages))
         if monitor_messages:

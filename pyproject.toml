@@ -16,4 +16,4 @@ dependencies = { file = ["requirements.txt"] }
 where = ["src"]
 
 [tool.setuptools.data-files]
-"share/espress-view/assets/icons" = ["assets/icons/*.ico", "assets/icons/*.png"]
+"share/espress-view/assets/icons" = ["assets/icons/*.ico", "assets/icons/*.png", "assets/icons/*.txt"]

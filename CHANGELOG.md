@@ -8,13 +8,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Added
 
-- A theme-aware outline icon system, semantic light/dark design tokens, and persistent appearance and window-size preferences.
+- Bundled Lucide outline icons, a three-state Light/System/Dark appearance selector, and semantic design tokens.
 - Bounded, batched terminal output with scroll-position preservation and clearer discovery, connection, and flash statuses.
 
 ### Changed
 
 - Redesigned the Monitor and Flash workspaces with a responsive shared shell and consistent device selection.
 - Workspace navigation and flash-log expansion now preserve the current window size and maximized state.
+- Warmed the light palette, improved input and focus contrast, and aligned the Flash toolbar with Monitor controls.
+- Made flash status and progress reflect subprocess events, and expose Abort only after the child process starts.
+- Defaulted new settings to System appearance and added editable `esp_monitor.log` and `esp_flash.log` export suggestions.
+- Refined the GUI with icon-only accessible appearance segments, Lucide dropdown chevrons, an inline Monitor heading, and higher-contrast connection icons.
 
 ## [0.4.0] - 2026-09-03
 

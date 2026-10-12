@@ -26,7 +26,12 @@ class FlashRunner:
         with self._lock:
             return self._process is not None and self._process.poll() is None
 
-    def run(self, arguments: list[str], on_output: Callable[[str], None]) -> int:
+    def run(
+        self,
+        arguments: list[str],
+        on_output: Callable[[str], None],
+        on_started: Callable[[], None] | None = None,
+    ) -> int:
         """Run esptool, forward each output line, and return its exit code."""
         process = subprocess.Popen(
             esptool_worker_command(arguments),
@@ -39,6 +44,8 @@ class FlashRunner:
         with self._lock:
             self._process = process
         try:
+            if on_started is not None:
+                on_started()
             if process.stdout is not None:
                 for line in process.stdout:
                     on_output(line)

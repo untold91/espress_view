@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 DEFAULT_SETTINGS = {
-    "theme": "dark",
+    "theme": "system",
     "flash_baud": "2000000",
     "monitor_baud": "115200",
     "last_view": "monitor",

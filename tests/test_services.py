@@ -10,7 +10,7 @@ from unittest.mock import Mock, patch
 from espress_view.core import serial_monitor
 from espress_view.core import device_discovery
 from espress_view.flasher.arguments import build_flash_arguments
-from espress_view.flasher.runner import esptool_worker_command
+from espress_view.flasher.runner import FlashRunner, esptool_worker_command
 from espress_view.utils.paths import resource_path
 
 
@@ -39,6 +39,24 @@ class FlashingTests(unittest.TestCase):
     def test_rejects_missing_firmware(self) -> None:
         with self.assertRaisesRegex(ValueError, "Firmware file not found"):
             build_flash_arguments("COM7", "2000000", [("missing-firmware.bin", "0x1000")])
+
+
+class FlashRunnerTests(unittest.TestCase):
+    @patch("espress_view.flasher.runner.subprocess.Popen")
+    def test_notifies_when_the_child_process_is_started(self, popen: Mock) -> None:
+        process = Mock()
+        process.stdout = iter(["50%\n"])
+        process.wait.return_value = 0
+        popen.return_value = process
+        started = Mock()
+        output: list[str] = []
+        runner = FlashRunner()
+
+        self.assertEqual(runner.run(["--port", "COM7"], output.append, started), 0)
+
+        started.assert_called_once_with()
+        self.assertEqual(output, ["50%\n"])
+        self.assertFalse(runner.is_running)
 
 
 class DeviceDiscoveryTests(unittest.TestCase):
