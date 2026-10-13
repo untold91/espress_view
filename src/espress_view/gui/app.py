@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """CustomTkinter frontend for device discovery, monitoring, and flashing."""
 
+# pylint: disable=too-many-lines
+
 import logging
 import queue
 import re
@@ -31,6 +33,7 @@ from espress_view.gui.design import (
     SPACE_XS,
     color,
 )
+from espress_view.gui.appearance import AppearanceSelector
 from espress_view.gui.icons import ICON_NAMES, load_icon
 from espress_view.gui.widgets import ChevronOptionMenu
 
@@ -41,7 +44,7 @@ EVENT_BATCH_SIZE = 500
 
 
 @dataclass
-class Partition:
+class Partition:  # pylint: disable=too-many-instance-attributes
     """Store the widgets and values for one firmware partition."""
 
     row: ctk.CTkFrame
@@ -111,10 +114,33 @@ class Tooltip:
             self.window = None
 
 
-class EspressView(ctk.CTk):
+class EspressView(ctk.CTk):  # pylint: disable=too-many-instance-attributes
     """Provide shared ESP discovery, serial monitoring, and firmware flashing."""
 
-    def __init__(self) -> None:
+    # These widget references are built in dedicated view-construction methods.
+    flash_view: ctk.CTkFrame
+    flash_workspace: ctk.CTkFrame
+    add_partition_button: ctk.CTkButton
+    partitions_frame: ctk.CTkScrollableFrame
+    flash_baud_label: ctk.CTkLabel
+    baud_menu: ChevronOptionMenu
+    status_label: ctk.CTkLabel
+    flash_button: ctk.CTkButton
+    flash_progress_area: ctk.CTkFrame
+    progress: ctk.CTkProgressBar
+    progress_text_label: ctk.CTkLabel
+    abort_button: ctk.CTkButton
+    console_frame: ctk.CTkFrame
+    log_toggle: ctk.CTkButton
+    log_tooltip: Tooltip
+    console: ctk.CTkTextbox
+    monitor_heading: ctk.CTkLabel
+    monitor_description: ctk.CTkLabel
+    monitor_baud_menu: ChevronOptionMenu
+    monitor_status_label: ctk.CTkLabel
+    command_entry: ctk.CTkEntry
+
+    def __init__(self) -> None:  # pylint: disable=too-many-statements
         """Initialize the application window, controls, and event polling."""
         self._settings = AppSettings()
         initial_view = self._settings.last_view
@@ -132,6 +158,9 @@ class EspressView(ctk.CTk):
         self._flash_abort_requested = threading.Event()
         self._scan_active = False
         self._closing = False
+        self._initial_scan = True
+        self._scan_op_id = 0
+        self._flash_op_id = 0
         self._event_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._partitions: list[Partition] = []
         self._monitor_serial: serial.Serial | None = None
@@ -218,7 +247,7 @@ class EspressView(ctk.CTk):
         )
 
     def _load_icons(self) -> dict[str, ctk.CTkImage]:
-        """Load bundled Lucide icons with theme-aware foreground colours."""
+        """Load bundled Lucide icons with theme-aware foreground colors."""
         light_color = color("text_secondary")[0]
         dark_color = color("text_secondary")[1]
         return {
@@ -231,7 +260,7 @@ class EspressView(ctk.CTk):
         }
 
     def _load_status_icons(self) -> dict[str, ctk.CTkImage]:
-        """Create status icons using the semantic status colours in each theme."""
+        """Create status icons using the semantic status colors in each theme."""
         variants = {
             "Ready": ("plug", "text_muted"),
             "Starting": ("plug", "accent"),
@@ -260,7 +289,7 @@ class EspressView(ctk.CTk):
             )
             for name in ("plug", "unplug")
         }
-    def _build_interface(self) -> None:
+    def _build_interface(self) -> None:  # pylint: disable=too-many-statements
         """Build the shared application shell and both workspaces."""
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -338,36 +367,16 @@ class EspressView(ctk.CTk):
             text_color=color("text_muted"),
         ).pack(anchor="w", padx=2, pady=(0, 6))
         self.theme_var = ctk.StringVar(value=self._settings.theme)
-        self.theme_selector = ctk.CTkFrame(
+        self.theme_selector = AppearanceSelector(
             sidebar_footer,
-            fg_color=color("surface"),
-            corner_radius=8,
-            border_width=1,
-            border_color=color("border"),
+            theme_var=self.theme_var,
+            icons=self._icons,
+            on_change=self._change_theme,
+            add_tooltip=self._add_tooltip,
+            add_focus_indicator=self._add_focus_indicator,
         )
         self.theme_selector.pack(fill="x")
-        self.theme_buttons: dict[str, ctk.CTkButton] = {}
-        for column, (mode, icon_name) in enumerate(
-            (("light", "sun"), ("system", "monitor"), ("dark", "moon"))
-        ):
-            self.theme_selector.grid_columnconfigure(column, weight=1, uniform="appearance")
-            button = ctk.CTkButton(
-                self.theme_selector,
-                text="",
-                image=self._icons[icon_name],
-                command=lambda selected=mode: self._change_theme(selected),
-                width=44,
-                height=38,
-                corner_radius=6,
-                fg_color="transparent",
-                hover_color=color("accent_subtle"),
-                text_color=color("text_secondary"),
-            )
-            button.appearance_accessible_name = f"{mode.title()} appearance"
-            button.grid(row=0, column=column, sticky="ew", padx=2, pady=2)
-            self.theme_buttons[mode] = button
-            self._add_tooltip(button, f"{mode.title()} appearance")
-            self._add_focus_indicator(button)
+        self.theme_buttons = self.theme_selector.buttons
         self._sync_appearance_selector()
 
         main_area = ctk.CTkFrame(self, fg_color="transparent")
@@ -437,7 +446,7 @@ class EspressView(ctk.CTk):
         self._build_monitor_view()
         self.show_monitor()
 
-    def _build_flash_view(self) -> None:
+    def _build_flash_view(self) -> None:  # pylint: disable=too-many-statements
         """Build firmware configuration, progress, and the collapsible console."""
         self.flash_view = ctk.CTkFrame(self.view_area, fg_color="transparent")
         self.flash_view.grid(row=0, column=0, sticky="nsew")
@@ -505,7 +514,6 @@ class EspressView(ctk.CTk):
         self._add_focus_indicator(self.add_partition_button)
         self.partitions_frame = ctk.CTkScrollableFrame(
             workspace,
-            height=128,
             fg_color="transparent",
             scrollbar_button_color=color("border"),
             scrollbar_button_hover_color=color("text_muted"),
@@ -901,13 +909,16 @@ class EspressView(ctk.CTk):
 
     def _sync_appearance_selector(self) -> None:
         """Keep exactly one appearance segment selected."""
-        selected = self.theme_var.get()
-        for mode, button in self.theme_buttons.items():
-            active = mode == selected
-            button.configure(
-                fg_color=color("accent_subtle") if active else "transparent",
-                text_color=color("accent") if active else color("text_secondary"),
-            )
+        if hasattr(self, "theme_selector") and hasattr(self.theme_selector, "sync"):
+            self.theme_selector.sync()
+        elif hasattr(self, "theme_buttons"):
+            selected = self.theme_var.get()
+            for mode, button in self.theme_buttons.items():
+                active = mode == selected
+                button.configure(
+                    fg_color=color("accent_subtle") if active else "transparent",
+                    text_color=color("accent") if active else color("text_secondary"),
+                )
 
     def _layout_monitor_heading(self, event: Event) -> None:
         """Wrap the description only when the heading row cannot fit on one line."""
@@ -1110,6 +1121,7 @@ class EspressView(ctk.CTk):
         self.command_entry.configure(state="normal")
         self.monitor_baud_menu.configure(state="disabled")
         self.scan_button.configure(state="disabled")
+        self.port_menu.configure(state="disabled")
         self._write_monitor_log(f"Connected to {port} at {self.monitor_baud_var.get()} baud.\n")
 
     def _monitor_worker(self, connection: serial.Serial, stop_event: threading.Event, port: str) -> None:
@@ -1118,6 +1130,12 @@ class EspressView(ctk.CTk):
             try:
                 data = serial_monitor.read(connection)
             except (serial.SerialException, OSError) as error:
+                if not stop_event.is_set():
+                    self._event_queue.put(("monitor-error", f"{port}\t{error}"))
+                break
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                # Convert unexpected worker failures into a visible connection error.
+                LOGGER.exception("Unexpected error in monitor worker: %s", error)
                 if not stop_event.is_set():
                     self._event_queue.put(("monitor-error", f"{port}\t{error}"))
                 break
@@ -1133,7 +1151,7 @@ class EspressView(ctk.CTk):
         if connection is not None:
             try:
                 connection.close()
-            except serial.SerialException as error:
+            except (serial.SerialException, OSError) as error:
                 LOGGER.warning("Could not close serial monitor: %s", error)
         self.monitor_status_var.set("Disconnected")
         self.monitor_status_label.configure(text_color=color("text_muted"))
@@ -1146,9 +1164,7 @@ class EspressView(ctk.CTk):
         )
         self.monitor_send_button.configure(state="disabled")
         self.command_entry.configure(state="disabled")
-        self.monitor_baud_menu.configure(state="disabled" if self._flash_busy else "normal")
-        if not self._flash_busy and not self._scan_active:
-            self.scan_button.configure(state="normal")
+        self._set_scan_controls(self._scan_active)
         if not self._closing:
             self._write_monitor_log("Disconnected.\n")
 
@@ -1175,8 +1191,15 @@ class EspressView(ctk.CTk):
 
     def save_monitor_log(self) -> None:
         """Save retained serial-monitor output to a user-selected text file."""
+        default_file = (
+            getattr(self._settings, "monitor_log_filename", "esp_monitor.log")
+            if hasattr(self, "_settings")
+            else "esp_monitor.log"
+        )
+        if not isinstance(default_file, str):
+            default_file = "esp_monitor.log"
         destination = filedialog.asksaveasfilename(
-            initialfile="esp_monitor.log",
+            initialfile=default_file,
             defaultextension=".log",
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1200,40 +1223,53 @@ class EspressView(ctk.CTk):
             self.device_status_label.configure(text_color=color("warning"))
             return
         self._scan_active = True
+        self._scan_op_id = getattr(self, "_scan_op_id", 0) + 1
+        current_op = self._scan_op_id
         self.device_status_var.set("Scanning for ESP devices…")
         self.device_status_label.configure(text_color=color("accent"))
         self._set_scan_controls(True)
-        threading.Thread(target=self._scan_worker, daemon=True).start()
+        threading.Thread(target=self._scan_worker, args=(current_op,), daemon=True).start()
 
-    def _scan_worker(self) -> None:
+    def _scan_worker(self, op_id: int | None = None) -> None:
         """Handshake each serial port and return ESP devices with their MAC addresses."""
         try:
             devices = discover_devices()
+            payload = "\n".join("\t".join((device.chip_type, device.port, device.mac_address)) for device in devices)
+            if op_id is not None:
+                self._event_queue.put(("devices", f"{op_id}\t{payload}"))
+            else:
+                self._event_queue.put(("devices", payload))
         except OSError as error:
             LOGGER.error("Serial device scan failed: %s", error)
-            self._event_queue.put(("scan-error", str(error)))
-            return
-        self._event_queue.put(
-            ("devices", "\n".join("\t".join((device.chip_type, device.port, device.mac_address)) for device in devices))
-        )
+            if op_id is not None:
+                self._event_queue.put(("scan-error", f"{op_id}\t{error}"))
+            else:
+                self._event_queue.put(("scan-error", str(error)))
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # Keep the UI informed even when discovery fails for an unforeseen reason.
+            LOGGER.exception("Unexpected error during device scan: %s", error)
+            if op_id is not None:
+                self._event_queue.put(("scan-error", f"{op_id}\tScan failure: {error}"))
+            else:
+                self._event_queue.put(("scan-error", f"Scan failure: {error}"))
 
     def _set_scan_controls(self, scanning: bool) -> None:
         """Prevent serial operations from racing with the discovery handshake."""
-        state = "disabled" if scanning or self._flash_busy else "normal"
+        locked = scanning or self._flash_busy or self._monitor_serial is not None
         self.scan_button.configure(
-            state="disabled" if scanning or self._flash_busy or self._monitor_serial is not None else "normal"
+            state="disabled" if locked else "normal"
         )
-        self.port_menu.configure(state="disabled" if scanning or self._flash_busy else "normal")
+        self.port_menu.configure(state="disabled" if locked else "normal")
         self.flash_button.configure(state="disabled" if scanning or self._flash_busy else "normal")
         self.monitor_connect_button.configure(
             state="disabled" if scanning or self._flash_busy else "normal"
         )
         self.monitor_baud_menu.configure(
-            state="disabled" if scanning or self._flash_busy or self._monitor_serial is not None else "normal"
+            state="disabled" if locked else "normal"
         )
-        self.baud_menu.configure(state=state)
+        self.baud_menu.configure(state="disabled" if scanning or self._flash_busy else "normal")
 
-    def flash_program(self) -> None:
+    def flash_program(self) -> None:  # pylint: disable=too-many-return-statements
         """Validate the configuration and start the selected esptool operation."""
         if self._closing:
             return
@@ -1264,7 +1300,14 @@ class EspressView(ctk.CTk):
             self._set_flash_status("Failed")
             self._write_console(f"{error}\n")
             return
+        except (OSError, TypeError, TclError) as error:
+            LOGGER.error("Could not prepare flash arguments: %s", error)
+            self._set_flash_status("Failed")
+            self._write_console(f"Validation error: {error}\n")
+            return
         self._flash_busy = True
+        self._flash_op_id = getattr(self, "_flash_op_id", 0) + 1
+        current_op = self._flash_op_id
         self._flash_abort_requested.clear()
         self.progress_var.set(0)
         self.progress_text_var.set("Working…")
@@ -1277,11 +1320,15 @@ class EspressView(ctk.CTk):
         self.monitor_connect_button.configure(state="disabled")
         self._set_abort_disabled()
         self._write_console(f"$ {' '.join(esptool_worker_command(arguments))}\n")
-        self._flash_thread = threading.Thread(target=self._flash_worker, args=(arguments,), daemon=True)
+        self._flash_thread = threading.Thread(
+            target=self._flash_worker,
+            args=(arguments, current_op),
+            daemon=True,
+        )
         try:
             self._flash_thread.start()
         except RuntimeError as error:
-            LOGGER.error("Could not start flash worker: %s", error)
+            LOGGER.exception("Could not start flash worker: %s", error)
             self.progress.stop()
             self._set_flash_busy(False)
             self._set_flash_status("Failed")
@@ -1331,26 +1378,37 @@ class EspressView(ctk.CTk):
         self.disconnect_monitor()
         self.flash_program()
 
-    def _flash_worker(self, arguments: list[str]) -> None:
+    def _flash_worker(self, arguments: list[str], op_id: int | None = None) -> None:
         """Run esptool, forwarding its combined output to the UI queue."""
+        def put_msg(event: str, value: str) -> None:
+            if op_id is not None:
+                self._event_queue.put((event, f"{op_id}\t{value}"))
+            else:
+                self._event_queue.put((event, value))
+
         try:
             def forward_output(line: str) -> None:
-                self._event_queue.put(("console", line))
+                put_msg("console", line)
                 percentage = re.search(r"(\d+(?:\.\d+)?)\s*%", line)
                 if percentage is not None:
-                    self._event_queue.put(("progress", percentage.group(1)))
+                    put_msg("progress", percentage.group(1))
 
             exit_code = self._flash_runner.run(
                 arguments,
                 forward_output,
-                on_started=lambda: self._event_queue.put(("started", "")),
+                on_started=lambda: put_msg("started", ""),
             )
             result = "aborted" if self._flash_abort_requested.is_set() and exit_code != 0 else str(exit_code)
-            self._event_queue.put(("complete", result))
+            put_msg("complete", result)
         except (OSError, subprocess.SubprocessError, ValueError) as error:
             LOGGER.error("Could not start esptool: %s", error)
-            self._event_queue.put(("console", f"Unable to start esptool: {error}\n"))
-            self._event_queue.put(("complete", "startup-error"))
+            put_msg("console", f"Unable to start esptool: {error}\n")
+            put_msg("complete", "startup-error")
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # Surface unexpected worker failures and restore the UI through its event queue.
+            LOGGER.exception("Unexpected error in flash worker: %s", error)
+            put_msg("console", f"Flash worker error: {error}\n")
+            put_msg("complete", "worker-error")
 
     def abort_flash(self) -> None:
         """Terminate the active esptool process, if a flash is underway."""
@@ -1384,20 +1442,20 @@ class EspressView(ctk.CTk):
         self.log_visible = not self.log_visible
         if self.log_visible:
             self.console.grid()
-            self.flash_workspace.configure(height=220)
-            self.flash_workspace.grid_propagate(False)
-            self.flash_view.grid_rowconfigure(1, weight=0)
-            self.flash_view.grid_rowconfigure(3, weight=1)
+            self.flash_workspace.grid_propagate(True)
+            self.flash_view.grid_rowconfigure(1, weight=1, minsize=140)
+            self.flash_view.grid_rowconfigure(3, weight=1, minsize=120)
             self.log_toggle.configure(image=self._icons["chevron-down"])
             self.log_tooltip.text = "Hide flash output"
         else:
             self.console.grid_remove()
             self.flash_workspace.grid_propagate(True)
-            self.flash_view.grid_rowconfigure(1, weight=1)
-            self.flash_view.grid_rowconfigure(3, weight=0)
+            self.flash_view.grid_rowconfigure(1, weight=1, minsize=0)
+            self.flash_view.grid_rowconfigure(3, weight=0, minsize=0)
             self.log_toggle.configure(image=self._icons["chevron-up"])
             self.log_tooltip.text = "Show flash output"
-        self._settings.show_flash_logs = self.log_visible
+        if hasattr(self, "_settings"):
+            self._settings.show_flash_logs = self.log_visible
 
     def clear_log(self) -> None:
         """Remove all retained output from the expanded console."""
@@ -1405,8 +1463,15 @@ class EspressView(ctk.CTk):
 
     def save_log(self) -> None:
         """Save retained console output to a user-selected text file."""
+        default_file = (
+            getattr(self._settings, "flash_log_filename", "esp_flash.log")
+            if hasattr(self, "_settings")
+            else "esp_flash.log"
+        )
+        if not isinstance(default_file, str):
+            default_file = "esp_flash.log"
         destination = filedialog.asksaveasfilename(
-            initialfile="esp_flash.log",
+            initialfile=default_file,
             defaultextension=".log",
             filetypes=[("Log files", "*.log"), ("Text files", "*.txt"), ("All files", "*.*")],
         )
@@ -1420,7 +1485,7 @@ class EspressView(ctk.CTk):
             return
         self._write_console(f"Log saved: {destination}\n")
 
-    def _drain_events(self) -> None:
+    def _drain_events(self) -> None:  # pylint: disable=too-many-branches,too-many-statements
         """Apply worker results on the UI thread and schedule the next poll."""
         console_messages: list[str] = []
         monitor_messages: list[str] = []
@@ -1432,6 +1497,10 @@ class EspressView(ctk.CTk):
                 break
             processed += 1
             if event == "console":
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_flash_op_id") and int(op_str) != self._flash_op_id:
+                        continue
                 console_messages.append(value)
             elif event == "monitor":
                 monitor_messages.append(value)
@@ -1443,30 +1512,51 @@ class EspressView(ctk.CTk):
                     self.monitor_status_var.set("Connection lost")
                     self.monitor_status_label.configure(text_color=color("error"))
             elif event == "devices":
-                devices = [device.split("\t") for device in value.splitlines()]
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_scan_op_id") and int(op_str) != self._scan_op_id:
+                        continue
+                devices = [device.split("\t") for device in value.splitlines() if device.strip()]
+                previous_port = self._selected_port()
                 self._display_devices(devices)
                 self._scan_active = False
                 self._set_scan_controls(False)
                 count = len(devices)
-                self.device_status_var.set(
-                    f"{count} ESP device found" if count == 1 else f"{count} ESP devices found"
-                )
-                self.device_status_label.configure(
-                    text_color=color("success") if count else color("text_muted")
-                )
+                current_port = self._selected_port()
+                if not (previous_port and not current_port):
+                    self.device_status_var.set(
+                        f"{count} ESP device found" if count == 1 else f"{count} ESP devices found"
+                    )
+                    self.device_status_label.configure(
+                        text_color=color("success") if count else color("text_muted")
+                    )
                 console_messages.append(f"Scan complete: {count} ESP device(s) found.\n")
+                self._initial_scan = False
             elif event == "scan-error":
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_scan_op_id") and int(op_str) != self._scan_op_id:
+                        continue
                 self._scan_active = False
                 self._display_devices([])
                 self._set_scan_controls(False)
                 self.device_status_var.set("Device scan failed")
                 self.device_status_label.configure(text_color=color("error"))
                 console_messages.append(f"Device scan failed: {value}\n")
+                self._initial_scan = False
             elif event == "started":
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_flash_op_id") and int(op_str) != self._flash_op_id:
+                        continue
                 if self._flash_busy and not self._flash_abort_requested.is_set():
                     self._set_flash_status("Flashing")
                     self.abort_button.configure(state="normal")
             elif event == "complete":
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_flash_op_id") and int(op_str) != self._flash_op_id:
+                        continue
                 self._set_flash_busy(False)
                 self._set_abort_disabled()
                 self.progress.stop()
@@ -1483,6 +1573,10 @@ class EspressView(ctk.CTk):
                     self.progress_text_var.set("Failed")
                     console_messages.append(f"Flash failed with status: {value}\n")
             elif event == "progress":
+                if "\t" in value and value.split("\t", 1)[0].isdigit():
+                    op_str, value = value.split("\t", 1)
+                    if hasattr(self, "_flash_op_id") and int(op_str) != self._flash_op_id:
+                        continue
                 percentage = min(max(float(value), 0), 100)
                 if self.status_var.get() != "Aborting":
                     self.progress.stop()
@@ -1501,9 +1595,30 @@ class EspressView(ctk.CTk):
 
     def _display_devices(self, devices: list[list[str]]) -> None:
         """Populate compact device entries containing chip type, COM ID, and MAC."""
-        entries = [f"{chip_type} | {port} | {mac_address}" for chip_type, port, mac_address in devices]
+        entries = [f"{device[0]} | {device[1]} | {device[2]}" for device in devices if len(device) >= 3]
+        previous_port = self._selected_port()
         self.port_menu.configure(values=entries or ["No device selected"])
-        self.port_var.set(entries[0] if entries else "No device selected")
+
+        matching_entry = None
+        if previous_port:
+            for entry in entries:
+                parts = entry.split(" | ")
+                if len(parts) >= 2 and parts[1] == previous_port:
+                    matching_entry = entry
+                    break
+
+        if matching_entry is not None:
+            self.port_var.set(matching_entry)
+        elif previous_port:
+            self.port_var.set("No device selected")
+            self.device_status_var.set(f"Selected port {previous_port} disconnected")
+            self.device_status_label.configure(text_color=color("warning"))
+        else:
+            is_initial = getattr(self, "_initial_scan", False)
+            if is_initial and entries:
+                self.port_var.set(entries[0])
+            else:
+                self.port_var.set("No device selected")
 
     def _write_console(self, message: str) -> None:
         """Append text to the read-only console and reveal its latest output."""

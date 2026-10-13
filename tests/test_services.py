@@ -1,11 +1,16 @@
 """Tests for the application backend services."""
 
+# Test names are descriptive; their imports follow the local src-path bootstrap.
+# pylint: disable=duplicate-code,missing-class-docstring,missing-function-docstring,wrong-import-position
+
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from espress_view.core import serial_monitor
 from espress_view.core import device_discovery
@@ -44,7 +49,8 @@ class FlashingTests(unittest.TestCase):
 class FlashRunnerTests(unittest.TestCase):
     @patch("espress_view.flasher.runner.subprocess.Popen")
     def test_notifies_when_the_child_process_is_started(self, popen: Mock) -> None:
-        process = Mock()
+        process = MagicMock()
+        process.__enter__.return_value = process
         process.stdout = iter(["50%\n"])
         process.wait.return_value = 0
         popen.return_value = process

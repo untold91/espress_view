@@ -1,6 +1,13 @@
 """Tests for the local GUI design assets."""
 
+# Test names are descriptive; their imports follow the local src-path bootstrap.
+# pylint: disable=duplicate-code,missing-class-docstring,missing-function-docstring,wrong-import-position
+
+import sys
 import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from espress_view.gui.design import COLORS
 from espress_view.gui.icons import ICON_NAMES, load_icon

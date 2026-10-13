@@ -1,11 +1,17 @@
 """Tests for GUI lifecycle events and editable log export defaults."""
 
+# Test names are descriptive, and GUI tests intentionally inspect widget internals.
+# pylint: disable=duplicate-code,missing-class-docstring,missing-function-docstring,protected-access,wrong-import-position
+
 import queue
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from threading import Event
 from unittest.mock import Mock, patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from espress_view.gui.app import EspressView
 
@@ -108,6 +114,81 @@ class FlashUiLifecycleTests(unittest.TestCase):
         subject.progress.configure.assert_called_once_with(mode="determinate")
         subject.progress_var.set.assert_called_once_with(0.375)
         subject._set_flash_status.assert_called_once_with("Flashing")
+
+
+class LayoutAndControlsTests(unittest.TestCase):
+    def test_toggle_log_expands_and_collapses_responsively(self) -> None:
+        subject = Mock()
+        subject.log_visible = False
+        subject.console = Mock()
+        subject.flash_workspace = Mock()
+        subject.flash_view = Mock()
+        subject.log_toggle = Mock()
+        subject.log_tooltip = Mock()
+        subject._icons = {"chevron-down": Mock(), "chevron-up": Mock()}
+        subject._settings = Mock()
+
+        # Expanding
+        EspressView.toggle_log(subject)
+        self.assertTrue(subject.log_visible)
+        subject.console.grid.assert_called_once()
+        subject.flash_workspace.grid_propagate.assert_called_once_with(True)
+        subject.flash_view.grid_rowconfigure.assert_any_call(1, weight=1, minsize=140)
+        subject.flash_view.grid_rowconfigure.assert_any_call(3, weight=1, minsize=120)
+
+        # Collapsing
+        EspressView.toggle_log(subject)
+        self.assertFalse(subject.log_visible)
+        subject.console.grid_remove.assert_called_once()
+        subject.flash_view.grid_rowconfigure.assert_any_call(1, weight=1, minsize=0)
+        subject.flash_view.grid_rowconfigure.assert_any_call(3, weight=0, minsize=0)
+
+    def test_remove_partition_renumbers_remaining_partitions(self) -> None:
+        subject = Mock()
+        subject._flash_busy = False
+        partition0 = Mock()
+        partition1 = Mock()
+        partition2 = Mock()
+        subject._partitions = [partition0, partition1, partition2]
+
+        EspressView.remove_partition(subject, partition1)
+
+        self.assertEqual(subject._partitions, [partition0, partition2])
+        partition1.row.destroy.assert_called_once()
+        # Remaining partition renumbered:
+        partition0.row.grid_configure.assert_called_with(row=0)
+        partition0.index_label.configure.assert_called_with(text="01")
+        partition2.row.grid_configure.assert_called_with(row=1)
+        partition2.index_label.configure.assert_called_with(text="02")
+
+    def test_cannot_remove_first_partition_or_during_flash(self) -> None:
+        subject = Mock()
+        subject._flash_busy = True
+        partition0 = Mock()
+        subject._partitions = [partition0]
+
+        # Cannot remove while flash busy
+        EspressView.remove_partition(subject, partition0)
+        partition0.row.destroy.assert_not_called()
+
+        subject._flash_busy = False
+        # Cannot remove partition 0 (permanent row)
+        EspressView.remove_partition(subject, partition0)
+        partition0.row.destroy.assert_not_called()
+
+    def test_change_theme_validates_mode(self) -> None:
+        subject = Mock()
+        subject._settings = Mock()
+        subject.theme_var = Mock()
+        subject._sync_appearance_selector = Mock()
+
+        with patch("customtkinter.set_appearance_mode") as set_mode:
+            EspressView._change_theme(subject, "dark")
+            set_mode.assert_called_once_with("Dark")
+            self.assertEqual(subject._settings.theme, "dark")
+
+        with self.assertRaises(ValueError):
+            EspressView._change_theme(subject, "invalid-theme")
 
 
 if __name__ == "__main__":

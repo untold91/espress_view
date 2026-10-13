@@ -15,7 +15,7 @@ def main() -> None:
     if not acquire_single_instance():
         LOGGER.warning("Espress View is already running")
         return
-    from espress_view.gui.app import EspressView
+    from espress_view.gui.app import EspressView  # pylint: disable=import-outside-toplevel
 
     application = EspressView()
     try:

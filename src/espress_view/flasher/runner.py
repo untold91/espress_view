@@ -33,27 +33,27 @@ class FlashRunner:
         on_started: Callable[[], None] | None = None,
     ) -> int:
         """Run esptool, forward each output line, and return its exit code."""
-        process = subprocess.Popen(
+        with subprocess.Popen(
             esptool_worker_command(arguments),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
-        )
-        with self._lock:
-            self._process = process
-        try:
-            if on_started is not None:
-                on_started()
-            if process.stdout is not None:
-                for line in process.stdout:
-                    on_output(line)
-            return process.wait()
-        finally:
+        ) as process:
             with self._lock:
-                if self._process is process:
-                    self._process = None
+                self._process = process
+            try:
+                if on_started is not None:
+                    on_started()
+                if process.stdout is not None:
+                    for line in process.stdout:
+                        on_output(line)
+                return process.wait()
+            finally:
+                with self._lock:
+                    if self._process is process:
+                        self._process = None
 
     def terminate(self) -> bool:
         """Terminate the active subprocess; return whether termination was requested."""
@@ -67,8 +67,8 @@ class FlashRunner:
 
 def run_esptool_worker(arguments: list[str]) -> int:
     """Run esptool inside the current Python or packaged executable process."""
-    import esptool
-    from esptool.util import FatalError
+    import esptool  # pylint: disable=import-outside-toplevel
+    from esptool.util import FatalError  # pylint: disable=import-outside-toplevel
 
     try:
         esptool.main(arguments)
